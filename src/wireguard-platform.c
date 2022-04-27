@@ -17,9 +17,9 @@ static struct mbedtls_entropy_context entropy_context;
 static bool is_platform_initialized = false;
 
 static int entropy_hw_random_source( void *data, unsigned char *output, size_t len, size_t *olen ) {
-    esp_fill_random(output, len);
+	esp_fill_random(output, len);
 	*olen = len;
-    return 0;
+	return 0;
 }
 
 void wireguard_platform_init() {
@@ -48,7 +48,7 @@ void wireguard_tai64n_now(uint8_t *output) {
 	// 64 bit seconds from 1970 = 8 bytes
 	// 32 bit nano seconds from current second
 
-	// Get timestamp. Note that the timestamp must be synced by NTP, 
+	// Get timestamp. Note that the timestamp must be synced by NTP,
 	//  or at least preserved in NVS, not to go back after reset.
 	// Otherwise, the WireGuard remote peer rejects handshake.
 	struct timeval tv;

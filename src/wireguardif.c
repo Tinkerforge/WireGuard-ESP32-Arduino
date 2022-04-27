@@ -1,7 +1,7 @@
 /*
  * Ported to ESP32 Arduino by Kenta Ida (fuga@fugafuga.org)
  * The original license is below:
- * 
+ *
  * Copyright (c) 2021 Daniel Hope (www.floorsense.nz)
  * All rights reserved.
  *
@@ -853,7 +853,7 @@ static void wireguardif_tmr(void *arg) {
 	int x;
 	// Reschedule this timer
 	sys_timeout(WIREGUARDIF_TIMER_MSECS, wireguardif_tmr, device);
-	
+
 	// Check periodic things
 	bool link_up = false;
 	for (x=0; x < WIREGUARD_MAX_PEERS; x++) {
