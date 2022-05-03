@@ -29,12 +29,23 @@ static uint8_t wireguard_peer_index = WIREGUARDIF_INVALID_INDEX;
 
 #define TAG "[WireGuard] "
 
-bool WireGuard::begin(const IPAddress& localIP, const IPAddress& Subnet, const IPAddress& Gateway, const char* privateKey, const char* remotePeerAddress, const char* remotePeerPublicKey, uint16_t remotePeerPort) {
+bool WireGuard::begin(const IPAddress& localIP,
+                      const IPAddress& Subnet,
+                      const IPAddress& Gateway,
+                      const char* privateKey,
+                      const char* remotePeerAddress,
+                      const char* remotePeerPublicKey,
+                      uint16_t remotePeerPort,
+                      const IPAddress &allowedIP,
+                      const IPAddress &allowedMask,
+                      bool make_default) {
 	struct wireguardif_init_data wg;
 	struct wireguardif_peer peer;
 	ip_addr_t ipaddr = IPADDR4_INIT(static_cast<uint32_t>(localIP));
 	ip_addr_t netmask = IPADDR4_INIT(static_cast<uint32_t>(Subnet));
 	ip_addr_t gateway = IPADDR4_INIT(static_cast<uint32_t>(Gateway));
+	ip_addr_t allowed_ip = IPADDR4_INIT(static_cast<uint32_t>(allowedIP));
+	ip_addr_t allowed_mask = IPADDR4_INIT(static_cast<uint32_t>(allowedMask));
 
 	assert(privateKey != NULL);
 	assert(remotePeerAddress != NULL);
@@ -91,13 +102,9 @@ bool WireGuard::begin(const IPAddress& localIP, const IPAddress& Subnet, const I
 
 	peer.public_key = remotePeerPublicKey;
 	peer.preshared_key = NULL;
-	// Allow all IPs through tunnel
-	{
-		ip_addr_t allowed_ip = IPADDR4_INIT_BYTES(0, 0, 0, 0);
-		peer.allowed_ip = allowed_ip;
-		ip_addr_t allowed_mask = IPADDR4_INIT_BYTES(0, 0, 0, 0);
-		peer.allowed_mask = allowed_mask;
-	}
+
+	peer.allowed_ip = allowed_ip;
+	peer.allowed_mask = allowed_mask;
 
 	peer.endport_port = remotePeerPort;
 
@@ -112,7 +119,8 @@ bool WireGuard::begin(const IPAddress& localIP, const IPAddress& Subnet, const I
 		// Save the current default interface for restoring when shutting down the WG interface.
 		previous_default_netif = netif_default;
 		// Set default interface to WG device.
-		netif_set_default(wg_netif);
+		if (make_default)
+			netif_set_default(wg_netif);
 	}
 
 	this->_is_initialized = true;
