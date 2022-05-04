@@ -38,7 +38,8 @@ bool WireGuard::begin(const IPAddress& localIP,
                       uint16_t remotePeerPort,
                       const IPAddress &allowedIP,
                       const IPAddress &allowedMask,
-                      bool make_default) {
+                      bool make_default,
+                      const char *preshared_key) {
 	struct wireguardif_init_data wg;
 	struct wireguardif_peer peer;
 	ip_addr_t ipaddr = IPADDR4_INIT(static_cast<uint32_t>(localIP));
@@ -101,7 +102,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 	netif_set_up(wg_netif);
 
 	peer.public_key = remotePeerPublicKey;
-	peer.preshared_key = NULL;
+	peer.preshared_key = preshared_key;
 
 	peer.allowed_ip = allowed_ip;
 	peer.allowed_mask = allowed_mask;

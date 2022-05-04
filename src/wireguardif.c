@@ -747,12 +747,15 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t
 	err_t result;
 	uint8_t public_key[WIREGUARD_PUBLIC_KEY_LEN];
 	size_t public_key_len = sizeof(public_key);
+	uint8_t preshared_key[WIREGUARD_SESSION_KEY_LEN];
+	size_t preshared_key_len = sizeof(preshared_key);
 	struct wireguard_peer *peer = NULL;
 
 	uint32_t t1 = wireguard_sys_now();
 
-	if (wireguard_base64_decode(p->public_key, public_key, &public_key_len)
-			&& (public_key_len == WIREGUARD_PUBLIC_KEY_LEN)) {
+	bool public_key_decoded = wireguard_base64_decode(p->public_key, public_key, &public_key_len) && (public_key_len == WIREGUARD_PUBLIC_KEY_LEN);
+	bool preshared_key_decoded = p->preshared_key == NULL || (wireguard_base64_decode(p->preshared_key, preshared_key, &preshared_key_len) && (preshared_key_len == WIREGUARD_SESSION_KEY_LEN));
+	if (public_key_decoded && preshared_key_decoded) {
 
 		// See if the peer is already registered
 		peer = peer_lookup_by_pubkey(device, public_key);
@@ -761,7 +764,7 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t
 			peer = peer_alloc(device);
 			if (peer) {
 
-				if (wireguard_peer_init(device, peer, public_key, p->preshared_key)) {
+				if (wireguard_peer_init(device, peer, public_key, p->preshared_key == NULL ? NULL : preshared_key)) {
 
 					peer->connect_ip = p->endpoint_ip;
 					peer->connect_port = p->endport_port;

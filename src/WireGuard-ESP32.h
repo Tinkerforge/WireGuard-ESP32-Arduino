@@ -30,7 +30,9 @@ public:
 	           const IPAddress &allowedMask = IPAddress(0, 0, 0, 0),
 	           // Make WireGuard the default interface for non-local traffic
 	           // (i.e. traffic requiring passing through an interface's gateway)
-	           bool make_default = true);
+	           bool make_default = true,
+	           // Optional preshared key for this connection.
+	           const char *preshared_key = nullptr);
 
 	void end();
 	bool is_initialized() const { return this->_is_initialized; }
