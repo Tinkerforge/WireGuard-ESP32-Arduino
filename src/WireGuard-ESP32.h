@@ -24,10 +24,10 @@ public:
 	           const char* remotePeerPublicKey,
 	           // Port of the peer
 	           uint16_t remotePeerPort,
-	           // IP to route over WireGuard
+	           // IP allowed as source in received packets
 	           const IPAddress &allowedIP = IPAddress(0, 0, 0, 0),
-	           // Subnet to route over WireGuard
-	           const IPAddress &allowedMask = IPAddress(0, 0, 0, 0),
+	           // Subnet allowed as source in received packets
+	           const IPAddress &allowedMask = IPAddress(255, 255, 255, 255),
 	           // Make WireGuard the default interface for non-local traffic
 	           // (i.e. traffic requiring passing through an interface's gateway)
 	           bool make_default = true,
