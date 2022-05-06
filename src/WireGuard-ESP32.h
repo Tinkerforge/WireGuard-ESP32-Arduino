@@ -5,6 +5,8 @@
 #pragma once
 #include <IPAddress.h>
 
+#include "lwip/ip_addr.h"
+
 class WireGuard
 {
 private:
@@ -36,4 +38,6 @@ public:
 
 	void end();
 	bool is_initialized() const { return this->_is_initialized; }
+
+	bool is_peer_up(ip_addr_t *current_ip, uint16_t *current_port);
 };

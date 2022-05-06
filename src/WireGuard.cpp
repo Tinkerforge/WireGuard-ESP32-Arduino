@@ -147,3 +147,8 @@ void WireGuard::end() {
 
 	this->_is_initialized = false;
 }
+
+bool WireGuard::is_peer_up(ip_addr_t *current_ip, uint16_t *current_port)
+{
+	return wireguardif_peer_is_up(wg_netif, wireguard_peer_index, current_ip, current_port) == ERR_OK;
+};
