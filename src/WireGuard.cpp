@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "esp_netif.h"
 #include "esp_system.h"
 
 #include "lwip/err.h"
@@ -28,6 +29,34 @@ static struct netif *previous_default_netif = NULL;
 static uint8_t wireguard_peer_index = WIREGUARDIF_INVALID_INDEX;
 
 #define TAG "[WireGuard] "
+
+struct netif_add_and_up_parameters {
+	const ip4_addr_t *ipaddr;
+	const ip4_addr_t *netmask;
+	const ip4_addr_t *gw;
+	void *state;
+};
+
+static esp_err_t netif_add_and_up_in_lwip_ctx(void *ctx) {
+	netif_add_and_up_parameters *param = static_cast<netif_add_and_up_parameters *>(ctx);
+
+	// Register the new WireGuard network interface with lwIP
+	wg_netif = netif_add(&wg_netif_struct, param->ipaddr, param->netmask, param->gw, param->state, &wireguardif_init, &ip_input);
+	if (!wg_netif) {
+		return ESP_FAIL;
+	}
+
+	// Mark the interface as administratively up, link up flag is set automatically when peer connects
+	netif_set_up(wg_netif);
+
+	return ESP_OK;
+}
+
+static esp_err_t netif_set_default_in_lwip_ctx(void *ctx) {
+	netif *nif = static_cast<netif *>(ctx);
+	netif_set_default(nif);
+	return ESP_OK;
+}
 
 bool WireGuard::begin(const IPAddress& localIP,
                       const IPAddress& Subnet,
@@ -92,14 +121,18 @@ bool WireGuard::begin(const IPAddress& localIP,
 		log_e(TAG "failed to get endpoint ip.");
 		return false;
 	}
-	// Register the new WireGuard network interface with lwIP
-	wg_netif = netif_add(&wg_netif_struct, ip_2_ip4(&ipaddr), ip_2_ip4(&netmask), ip_2_ip4(&gateway), &wg, &wireguardif_init, &ip_input);
+
+	netif_add_and_up_parameters params = {
+		ip_2_ip4(&ipaddr),
+		ip_2_ip4(&netmask),
+		ip_2_ip4(&gateway),
+		&wg,
+	};
+	esp_netif_tcpip_exec(netif_add_and_up_in_lwip_ctx, &params);
 	if( wg_netif == nullptr ) {
 		log_e(TAG "failed to initialize WG netif.");
 		return false;
 	}
-	// Mark the interface as administratively up, link up flag is set automatically when peer connects
-	netif_set_up(wg_netif);
 
 	peer.public_key = remotePeerPublicKey;
 	peer.preshared_key = preshared_key;
@@ -121,34 +154,44 @@ bool WireGuard::begin(const IPAddress& localIP,
 		previous_default_netif = netif_default;
 		// Set default interface to WG device.
 		if (make_default)
-			netif_set_default(wg_netif);
+			esp_netif_tcpip_exec(netif_set_default_in_lwip_ctx, wg_netif);
 	}
 
 	this->_is_initialized = true;
 	return true;
 }
 
+static esp_err_t shutdown_and_remove_in_lwip_ctx(void *ctx) {
+	netif *nif = static_cast<netif *>(ctx);
+
+	// Shutdown the wireguard interface.
+	wireguardif_shutdown(nif);
+	// Remove the WG interface;
+	netif_remove(nif);
+
+	return ESP_OK;
+}
+
 void WireGuard::end() {
 	if( !this->_is_initialized ) return;
 
 	// Restore the default interface.
-	netif_set_default(previous_default_netif);
+	esp_netif_tcpip_exec(netif_set_default_in_lwip_ctx, previous_default_netif);
 	previous_default_netif = nullptr;
 	// Disconnect the WG interface.
 	wireguardif_disconnect(wg_netif, wireguard_peer_index);
 	// Remove peer from the WG interface
 	wireguardif_remove_peer(wg_netif, wireguard_peer_index);
 	wireguard_peer_index = WIREGUARDIF_INVALID_INDEX;
-	// Shutdown the wireguard interface.
-	wireguardif_shutdown(wg_netif);
-	// Remove the WG interface;
-	netif_remove(wg_netif);
+
+	esp_netif_tcpip_exec(shutdown_and_remove_in_lwip_ctx, wg_netif);
 	wg_netif = nullptr;
 
 	this->_is_initialized = false;
 }
 
-bool WireGuard::is_peer_up(ip_addr_t *current_ip, uint16_t *current_port)
-{
+bool WireGuard::is_peer_up(ip_addr_t *current_ip, uint16_t *current_port) {
+	if (!this->_is_initialized) return false;
+
 	return wireguardif_peer_is_up(wg_netif, wireguard_peer_index, current_ip, current_port) == ERR_OK;
 };
