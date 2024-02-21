@@ -22,18 +22,14 @@ extern "C" {
 #include "wireguard-platform.h"
 }
 
-// Wireguard instance
-static struct netif wg_netif_struct = {0};
-static struct netif *wg_netif = NULL;
-static struct netif *previous_default_netif = NULL;
-static uint8_t wireguard_peer_index = WIREGUARDIF_INVALID_INDEX;
-
 #define TAG "[WireGuard] "
 
 struct netif_add_and_up_parameters {
 	const ip4_addr_t *ipaddr;
 	const ip4_addr_t *netmask;
 	const ip4_addr_t *gw;
+	struct netif **wg_netif;
+	struct netif *wg_netif_struct;
 	void *state;
 };
 
@@ -41,13 +37,13 @@ static esp_err_t netif_add_and_up_in_lwip_ctx(void *ctx) {
 	netif_add_and_up_parameters *param = static_cast<netif_add_and_up_parameters *>(ctx);
 
 	// Register the new WireGuard network interface with lwIP
-	wg_netif = netif_add(&wg_netif_struct, param->ipaddr, param->netmask, param->gw, param->state, &wireguardif_init, &ip_input);
-	if (!wg_netif) {
+	*param->wg_netif = netif_add(param->wg_netif_struct, param->ipaddr, param->netmask, param->gw, param->state, &wireguardif_init, &ip_input);
+	if (!param->wg_netif) {
 		return ESP_FAIL;
 	}
 
 	// Mark the interface as administratively up, link up flag is set automatically when peer connects
-	netif_set_up(wg_netif);
+	netif_set_up(*param->wg_netif);
 
 	return ESP_OK;
 }
@@ -126,6 +122,8 @@ bool WireGuard::begin(const IPAddress& localIP,
 		ip_2_ip4(&ipaddr),
 		ip_2_ip4(&netmask),
 		ip_2_ip4(&gateway),
+		&wg_netif,
+		&wg_netif_struct,
 		&wg,
 	};
 	esp_netif_tcpip_exec(netif_add_and_up_in_lwip_ctx, &params);
@@ -195,3 +193,7 @@ bool WireGuard::is_peer_up(ip_addr_t *current_ip, uint16_t *current_port) {
 
 	return wireguardif_peer_is_up(wg_netif, wireguard_peer_index, current_ip, current_port) == ERR_OK;
 };
+
+WireGuard::WireGuard() {
+	bzero(&wg_netif_struct, sizeof(wg_netif_struct));
+}

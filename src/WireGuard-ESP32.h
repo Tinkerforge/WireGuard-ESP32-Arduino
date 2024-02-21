@@ -7,11 +7,22 @@
 
 #include "lwip/ip_addr.h"
 
+extern "C" {
+ #include "wireguardif.h"
+}
+
 class WireGuard
 {
 private:
 	bool _is_initialized = false;
+	struct netif wg_netif_struct;
+	struct netif *wg_netif = NULL;
+	struct netif *previous_default_netif = NULL;
+	uint8_t wireguard_peer_index = WIREGUARDIF_INVALID_INDEX;
+
 public:
+	WireGuard();
+
 	bool begin(// Private address that this device will have in the WireGuard network
 	           const IPAddress& localIP,
 	           // Subnet of the WireGuard network
