@@ -27,6 +27,8 @@ public:
 	           const IPAddress& localIP,
 	           // Subnet of the WireGuard network
 	           const IPAddress& Subnet,
+			   // Port that the interface will try to bind to
+			   const uint16_t localPort,
 	           // Gateway of the WireGuard network
 	           const IPAddress& Gateway,
 	           // Our private key

@@ -56,6 +56,7 @@ static esp_err_t netif_set_default_in_lwip_ctx(void *ctx) {
 
 bool WireGuard::begin(const IPAddress& localIP,
                       const IPAddress& Subnet,
+                      const uint16_t localPort,
                       const IPAddress& Gateway,
                       const char* privateKey,
                       const char* remotePeerAddress,
@@ -80,7 +81,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 
 	// Setup the WireGuard device structure
 	wg.private_key = privateKey;
-	wg.listen_port = remotePeerPort;
+	wg.listen_port = localPort;
 
 	wg.bind_netif = NULL;
 
