@@ -40,6 +40,7 @@
 #include "lwip/arch.h"
 #include "lwip/netif.h"
 #include "lwip/ip_addr.h"
+#include "lwip/pbuf.h"
 
 // Default MTU for WireGuard is 1420 bytes
 #define WIREGUARDIF_MTU (1420)
@@ -54,6 +55,8 @@ struct wireguardif_init_data {
 	u16_t listen_port;
 	// Optional: restrict send/receive of encapsulated WireGuard traffic to this network interface only (NULL to use routing table)
 	struct netif *bind_netif;
+	int (*in_filter_fn)(struct pbuf*);
+	int (*out_filter_fn)(struct pbuf*);
 };
 
 struct wireguardif_peer {

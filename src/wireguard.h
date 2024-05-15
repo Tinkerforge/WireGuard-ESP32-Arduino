@@ -188,6 +188,8 @@ struct wireguard_device {
 
 	// List of peers associated with this device
  	struct wireguard_peer peers[WIREGUARD_MAX_PEERS];
+	int (*in_filter_fn)(struct pbuf*);
+	int (*out_filter_fn)(struct pbuf*);
 
 	bool valid;
 };

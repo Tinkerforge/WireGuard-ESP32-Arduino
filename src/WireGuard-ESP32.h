@@ -6,6 +6,7 @@
 #include <IPAddress.h>
 
 #include "lwip/ip_addr.h"
+#include "lwip/pbuf.h"
 
 extern "C" {
  #include "wireguardif.h"
@@ -47,7 +48,9 @@ public:
 	           // (i.e. traffic requiring passing through an interface's gateway)
 	           bool make_default = true,
 	           // Optional preshared key for this connection.
-	           const char *preshared_key = nullptr);
+	           const char *preshared_key = nullptr,
+			   int (*in_filter_fn)(struct pbuf*) = nullptr,
+			   int (*out_filter_fn)(struct pbuf*) = nullptr);
 
 	void end();
 	bool is_initialized() const { return this->_is_initialized; }

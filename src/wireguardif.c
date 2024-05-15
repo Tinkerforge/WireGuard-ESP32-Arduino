@@ -205,7 +205,9 @@ static err_t wireguardif_output(struct netif *netif, struct pbuf *q, const ip4_a
 	ip_addr_copy_from_ip4(ipaddr, *ip4addr);
 	struct wireguard_peer *peer = peer_lookup_by_allowed_ip(device, &ipaddr);
 	if (peer) {
-		return wireguardif_output_to_peer(netif, q, &ipaddr, peer);
+		if (device->out_filter_fn == NULL || device->out_filter_fn(q) == 0) {
+			return wireguardif_output_to_peer(netif, q, &ipaddr, peer);
+		}
 	} else {
 		return ERR_RTE;
 	}
@@ -349,10 +351,13 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 
 								// 5. If the plaintext packet has not been dropped, it is inserted into the receive queue of the wg0 interface.
 								if (dest_ok) {
-									// Send packet to be process by LWIP
-									ip_input(pbuf, device->netif);
-									// pbuf is owned by IP layer now
-									pbuf = NULL;
+									// Check if we have a custom filter function and if the filter funtion allows sending the packet
+									if (device->in_filter_fn == NULL || device->in_filter_fn(pbuf) == 0) {
+										// Send packet to be process by LWIP
+										ip_input(pbuf, device->netif);
+										// pbuf is owned by IP layer now
+										pbuf = NULL;
+									}
 								}
 							} else {
 								// IP header is corrupt or lied about packet size
@@ -961,6 +966,8 @@ err_t wireguardif_init(struct netif *netif) {
 						//udp_bind_netif(udp, underlying_netif);
 
 						device->udp_pcb = udp;
+						device->in_filter_fn = init_data->in_filter_fn;
+						device->out_filter_fn = init_data->out_filter_fn;
 						log_d(TAG "start device initialization");
 						// Per-wireguard netif/device setup
 						uint32_t t1 = wireguard_sys_now();
