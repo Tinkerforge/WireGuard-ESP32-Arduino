@@ -710,7 +710,9 @@ err_t wireguardif_peer_is_up(struct netif *netif, u8_t peer_index, ip_addr_t *cu
 	struct wireguard_peer *peer;
 	err_t result = wireguardif_lookup_peer(netif, peer_index, &peer);
 	if (result == ERR_OK) {
-		if ((peer->curr_keypair.valid) || (peer->prev_keypair.valid)) {
+		// If some kind of weird connection errors occure we need to add the condition " || (peer->prev_keypair.valid)"
+		// back and find another way to check correctly if the peer is up.
+		if ((peer->curr_keypair.valid)) {
 			result = ERR_OK;
 		} else {
 			result = ERR_CONN;
