@@ -205,9 +205,11 @@ static err_t wireguardif_output(struct netif *netif, struct pbuf *q, const ip4_a
 	ip_addr_copy_from_ip4(ipaddr, *ip4addr);
 	struct wireguard_peer *peer = peer_lookup_by_allowed_ip(device, &ipaddr);
 	if (peer) {
-		if (device->out_filter_fn == NULL || device->out_filter_fn(q) == 0) {
-			return wireguardif_output_to_peer(netif, q, &ipaddr, peer);
+		int filter_err = device->out_filter_fn == NULL ? 0 : device->out_filter_fn(q);
+		if (filter_err != 0) {
+			return filter_err;
 		}
+		return wireguardif_output_to_peer(netif, q, &ipaddr, peer);
 	} else {
 		return ERR_RTE;
 	}
