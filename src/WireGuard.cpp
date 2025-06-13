@@ -92,6 +92,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 	// Initialise the first WireGuard peer structure
 	wireguardif_peer_init(&peer);
 	// If we know the endpoint's address can add here
+	const int64_t t_resolve_start_us = esp_timer_get_time();
 	bool success_get_endpoint_ip = false;
 	for(int retry = 0; retry < 5; retry++) {
 		ip_addr_t endpoint_ip = IPADDR4_INIT_BYTES(0, 0, 0, 0);
@@ -99,8 +100,22 @@ bool WireGuard::begin(const IPAddress& localIP,
 		struct addrinfo hint;
 		memset(&hint, 0, sizeof(hint));
 		memset(&endpoint_ip, 0, sizeof(endpoint_ip));
+
+		const int64_t t_lookup_start_us = esp_timer_get_time();
 		if( lwip_getaddrinfo(remotePeerAddress, NULL, &hint, &res) != 0 ) {
-			vTaskDelay(pdMS_TO_TICKS(2000));
+			const  int64_t t_now_us       = esp_timer_get_time();
+			const uint32_t t_lookup_us    = static_cast<uint32_t>(t_now_us - t_lookup_start_us);
+			const uint32_t t_total_us     = static_cast<uint32_t>(t_now_us - t_resolve_start_us);
+			const uint32_t t_remaining_us = 15000000ul - t_total_us; // 15s
+
+			if (t_remaining_us < t_lookup_us) {
+				break;
+			}
+
+			const uint32_t t_lookup_ms = t_lookup_us / 1000;
+			if (t_lookup_ms < 2000) {
+				vTaskDelay(pdMS_TO_TICKS(2000 - t_lookup_ms));
+			}
 			continue;
 		}
 		success_get_endpoint_ip = true;
