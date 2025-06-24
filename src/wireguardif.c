@@ -968,7 +968,7 @@ err_t wireguardif_init(struct netif *netif) {
 
 	if (!udp) {
 		log_e(TAG "failed to allocate UDP");
-		result = ERR_MEM;
+		return ERR_MEM;
 	}
 
 	result = udp_bind(udp, IP_ADDR_ANY, init_data->listen_port); // Note this listens on all interfaces! Really just want the passed netif
