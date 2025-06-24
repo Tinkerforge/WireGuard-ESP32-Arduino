@@ -56,6 +56,9 @@
 
 #define TAG "[WireGuard] "
 
+// This ID is shared between all WireGuard instances.
+u8_t wg_netif_client_id = 0xFF;
+
 static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr, u16_t port) {
 	peer->ip = *addr;
 	peer->port = port;
@@ -89,7 +92,7 @@ static bool wireguardif_can_send_initiation(struct wireguard_peer *peer) {
 }
 
 static err_t wireguardif_peer_output(struct netif *netif, struct pbuf *q, struct wireguard_peer *peer) {
-	struct wireguard_device *device = (struct wireguard_device *)netif->state;
+	struct wireguard_device *device = (struct wireguard_device *) netif_get_client_data(netif, wg_netif_client_id);
 	// Send to last know port, not the connect port
 	//TODO: Support DSCP and ECN - lwip requires this set on PCB globally, not per packet
 	return udp_sendto_if(device->udp_pcb, q, &peer->ip, peer->port, device->underlying_netif);
@@ -199,7 +202,7 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 // This is used as the output function for the Wireguard netif
 // The ipaddr here is the one inside the VPN which we use to lookup the correct peer/endpoint
 static err_t wireguardif_output(struct netif *netif, struct pbuf *q, const ip4_addr_t *ip4addr) {
-	struct wireguard_device *device = (struct wireguard_device *)netif->state;
+	struct wireguard_device *device = (struct wireguard_device *) netif_get_client_data(netif, wg_netif_client_id);
 	// Send to peer that matches dest IP
 	ip_addr_t ipaddr;
 	ip_addr_copy_from_ip4(ipaddr, *ip4addr);
@@ -636,7 +639,7 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 }
 
 static err_t wireguard_start_handshake(struct netif *netif, struct wireguard_peer *peer) {
-	struct wireguard_device *device = (struct wireguard_device *)netif->state;
+	struct wireguard_device *device = (struct wireguard_device *) netif_get_client_data(netif, wg_netif_client_id);
 	err_t result;
 	struct pbuf *pbuf;
 	struct message_handshake_initiation msg;
@@ -656,8 +659,8 @@ static err_t wireguard_start_handshake(struct netif *netif, struct wireguard_pee
 
 static err_t wireguardif_lookup_peer(struct netif *netif, u8_t peer_index, struct wireguard_peer **out) {
 	LWIP_ASSERT("netif != NULL", (netif != NULL));
-	LWIP_ASSERT("state != NULL", (netif->state != NULL));
-	struct wireguard_device *device = (struct wireguard_device *)netif->state;
+	struct wireguard_device *device = (struct wireguard_device *) netif_get_client_data(netif, wg_netif_client_id);
+	LWIP_ASSERT("device != NULL", (device != NULL));
 	struct wireguard_peer *peer = NULL;
 	err_t result;
 
@@ -754,9 +757,9 @@ err_t wireguardif_update_endpoint(struct netif *netif, u8_t peer_index, const ip
 
 err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t *peer_index) {
 	LWIP_ASSERT("netif != NULL", (netif != NULL));
-	LWIP_ASSERT("state != NULL", (netif->state != NULL));
 	LWIP_ASSERT("p != NULL", (p != NULL));
-	struct wireguard_device *device = (struct wireguard_device *)netif->state;
+	struct wireguard_device *device = (struct wireguard_device *) netif_get_client_data(netif, wg_netif_client_id);
+	LWIP_ASSERT("device != NULL", (device != NULL));
 	err_t result;
 	uint8_t public_key[WIREGUARD_PUBLIC_KEY_LEN];
 	size_t public_key_len = sizeof(public_key);
@@ -912,9 +915,9 @@ static void wireguardif_tmr(void *arg) {
 
 void wireguardif_shutdown(struct netif *netif) {
 	LWIP_ASSERT("netif != NULL", (netif != NULL));
-	LWIP_ASSERT("state != NULL", (netif->state != NULL));
 
-	struct wireguard_device * device = (struct wireguard_device *)netif->state;
+	struct wireguard_device * device = (struct wireguard_device *) netif_get_client_data(netif, wg_netif_client_id);
+	LWIP_ASSERT("device != NULL", (device != NULL));
 	// Disable timer.
 	sys_untimeout(wireguardif_tmr, device);
 	// remove UDP context.
@@ -925,6 +928,7 @@ void wireguardif_shutdown(struct netif *netif) {
 	}
 	// remove device context.
 	free(device);
+	netif_set_client_data(netif, wg_netif_client_id, NULL);
 	netif->state = NULL;
 }
 
@@ -1006,7 +1010,7 @@ err_t wireguardif_init(struct netif *netif) {
 #if LWIP_CHECKSUM_CTRL_PER_NETIF
 	NETIF_SET_CHECKSUM_CTRL(netif, NETIF_CHECKSUM_ENABLE_ALL);
 #endif
-	netif->state = device;
+	netif_set_client_data(netif, wg_netif_client_id, device);
 	netif->name[0] = 'w';
 	netif->name[1] = 'g';
 	netif->output = wireguardif_output;

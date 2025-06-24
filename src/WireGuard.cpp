@@ -24,6 +24,8 @@ extern "C" {
 
 #define TAG "[WireGuard] "
 
+extern u8_t wg_netif_client_id;
+
 struct netif_add_and_up_parameters {
 	const ip4_addr_t *ipaddr;
 	const ip4_addr_t *netmask;
@@ -34,6 +36,19 @@ struct netif_add_and_up_parameters {
 
 static esp_err_t netif_add_and_up_in_lwip_ctx(void *ctx) {
 	netif_add_and_up_parameters *param = static_cast<netif_add_and_up_parameters *>(ctx);
+
+	if (wg_netif_client_id == 0xFF) {
+		wg_netif_client_id = netif_alloc_client_data_id();
+	}
+
+	// - netif->state is still used to pass the wireguardif_init_data to wireguardif_init.
+	// - netif_add clears netif->client_data, so we can't use netif_get/set_client_data to pass the init_data to wireguardif_init.
+	// - netif_add calls netif_set_addr directly before wireguardif_init
+	// - esp-netif is hooked into netif_set_addr and accesses netif->state if LWIP_ESP_NETIF_DATA is not set
+	// -> Require that LWIP_ESP_NETIF_DATA is set to make sure we and esp-netif don't use the same pointer.
+	#if !LWIP_ESP_NETIF_DATA
+	#error "LWIP_ESP_NETIF_DATA has to be set for wireguard to function!"
+	#endif
 
 	// Register the new WireGuard network interface with lwIP
 	if (netif_add(param->wg_netif, param->ipaddr, param->netmask, param->gw, param->state, &wireguardif_init, &ip_input) == nullptr) {
@@ -140,7 +155,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 		ip_2_ip4(&ipaddr),
 		ip_2_ip4(&netmask),
 		ip_2_ip4(&gateway),
-		this->wg_netif,
+		&this->wg_netif_struct,
 		&wg,
 	};
 	esp_err_t err = esp_netif_tcpip_exec(netif_add_and_up_in_lwip_ctx, &params);
