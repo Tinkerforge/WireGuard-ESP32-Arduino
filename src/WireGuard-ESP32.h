@@ -23,6 +23,10 @@ private:
 
 public:
 	WireGuard();
+	~WireGuard();
+
+	WireGuard(const WireGuard &other) = delete;
+	const WireGuard operator=(const WireGuard &other) = delete;
 
 	bool begin(// Private address that this device will have in the WireGuard network
 	           const IPAddress& localIP,

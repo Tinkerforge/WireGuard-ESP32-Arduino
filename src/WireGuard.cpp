@@ -230,3 +230,7 @@ bool WireGuard::is_peer_up(ip_addr_t *current_ip, uint16_t *current_port) {
 WireGuard::WireGuard() {
 	bzero(&wg_netif_struct, sizeof(wg_netif_struct));
 }
+
+WireGuard::~WireGuard() {
+	this->end();
+}
