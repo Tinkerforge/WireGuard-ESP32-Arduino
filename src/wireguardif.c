@@ -761,10 +761,10 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t
 	struct wireguard_device *device = (struct wireguard_device *) netif_get_client_data(netif, wg_netif_client_id);
 	LWIP_ASSERT("device != NULL", (device != NULL));
 	err_t result;
-	uint8_t public_key[WIREGUARD_PUBLIC_KEY_LEN];
-	size_t public_key_len = sizeof(public_key);
-	uint8_t preshared_key[WIREGUARD_SESSION_KEY_LEN];
-	size_t preshared_key_len = sizeof(preshared_key);
+	uint8_t *public_key = malloc(WIREGUARD_PUBLIC_KEY_LEN);
+	size_t public_key_len = WIREGUARD_PUBLIC_KEY_LEN;
+	uint8_t *preshared_key = malloc(WIREGUARD_SESSION_KEY_LEN);
+	size_t preshared_key_len = WIREGUARD_SESSION_KEY_LEN;
 	struct wireguard_peer *peer = NULL;
 
 	uint32_t t1 = wireguard_sys_now();
@@ -818,6 +818,10 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t
 			*peer_index = WIREGUARDIF_INVALID_INDEX;
 		}
 	}
+
+	free(preshared_key);
+	free(public_key);
+
 	return result;
 }
 
@@ -937,8 +941,8 @@ err_t wireguardif_init(struct netif *netif) {
 	struct wireguardif_init_data *init_data;
 	struct wireguard_device *device;
 	struct udp_pcb *udp;
-	uint8_t private_key[WIREGUARD_PRIVATE_KEY_LEN];
-	size_t private_key_len = sizeof(private_key);
+	uint8_t *private_key = malloc(WIREGUARD_PRIVATE_KEY_LEN);
+	size_t private_key_len = WIREGUARD_PRIVATE_KEY_LEN;
 
 	struct netif* underlying_netif;
 	underlying_netif = netif_default;	// Use current netif as the underlying netif of the WireGuard interface.
@@ -953,7 +957,8 @@ err_t wireguardif_init(struct netif *netif) {
 
 	if (!netif || !netif->state) {
 		log_e(TAG "netif or state is NULL: netif=%p, netif.state:%p", netif, netif ? netif->state : NULL);
-		return ERR_ARG;
+		result = ERR_ARG;
+		goto cleanup_private_key;
 	}
 
 	// The init data is passed into the netif_add call as the 'state' - we will replace this with our private state data
@@ -965,14 +970,16 @@ err_t wireguardif_init(struct netif *netif) {
 	if (!wireguard_base64_decode(init_data->private_key, private_key, &private_key_len)
 			|| (private_key_len != WIREGUARD_PRIVATE_KEY_LEN)) {
 		log_e(TAG "invalid init_data private key");
-		return ERR_ARG;
+		result = ERR_ARG;
+		goto cleanup_private_key;
 	}
 
 	udp = udp_new();
 
 	if (!udp) {
 		log_e(TAG "failed to allocate UDP");
-		return ERR_MEM;
+		result = ERR_MEM;
+		goto cleanup_private_key;
 	}
 
 	result = udp_bind(udp, IP_ADDR_ANY, init_data->listen_port); // Note this listens on all interfaces! Really just want the passed netif
@@ -1026,7 +1033,8 @@ err_t wireguardif_init(struct netif *netif) {
 	// Start a periodic timer for this wireguard device
 	sys_timeout(WIREGUARDIF_TIMER_MSECS, wireguardif_tmr, device);
 
-	return ERR_OK;
+	result = ERR_OK;
+	goto cleanup_private_key;
 
 cleanup_device:
 	mem_free(device);
@@ -1034,6 +1042,9 @@ cleanup_device:
 
 cleanup_udp:
 	udp_remove(udp);
+
+cleanup_private_key:
+	free(private_key);
 	return result;
 }
 
