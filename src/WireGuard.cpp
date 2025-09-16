@@ -20,6 +20,7 @@
 extern "C" {
 #include "wireguardif.h"
 #include "wireguard-platform.h"
+#include "wireguard.h"
 }
 
 #define TAG "[WireGuard] "
@@ -233,4 +234,8 @@ WireGuard::WireGuard() {
 
 WireGuard::~WireGuard() {
 	this->end();
+}
+
+bool WireGuard::derive_public_key(uint8_t *public_key, const uint8_t *private_key) {
+	return wireguard_generate_public_key(public_key, private_key);
 }

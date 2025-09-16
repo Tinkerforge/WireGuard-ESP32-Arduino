@@ -60,4 +60,6 @@ public:
 	bool is_initialized() const { return this->_is_initialized; }
 
 	bool is_peer_up(ip_addr_t *current_ip, uint16_t *current_port);
+
+	static bool derive_public_key(uint8_t *public_key, const uint8_t *private_key);
 };
