@@ -42,7 +42,8 @@
 #include "lwip/ip_addr.h"
 #include "lwip/pbuf.h"
 
-// Default MTU for WireGuard is 1420 bytes
+// Default MTU for WireGuard
+// Can be overridden by setting the mtu field in wireguardif_init_data
 #define WIREGUARDIF_MTU (1420)
 
 #define WIREGUARDIF_DEFAULT_PORT		(51820)
@@ -55,6 +56,8 @@ struct wireguardif_init_data {
 	u16_t listen_port;
 	// Optional: restrict send/receive of encapsulated WireGuard traffic to this network interface only (NULL to use routing table)
 	struct netif *bind_netif;
+	// Optional: MTU for the WireGuard interface (0 to use WIREGUARDIF_MTU default)
+	u16_t mtu;
 	int (*in_filter_fn)(struct pbuf*);
 	int (*out_filter_fn)(struct pbuf*);
 };

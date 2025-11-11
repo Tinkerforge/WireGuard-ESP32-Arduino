@@ -81,7 +81,8 @@ bool WireGuard::begin(const IPAddress& localIP,
                       bool make_default,
                       const char *preshared_key,
 					  int (*in_filter_fn)(struct pbuf*),
-					  int (*out_filter_fn)(struct pbuf*)) {
+					  int (*out_filter_fn)(struct pbuf*),
+					  uint16_t mtu) {
 	struct wireguardif_init_data wg;
 	struct wireguardif_peer peer;
 	ip_addr_t ipaddr = IPADDR4_INIT(static_cast<uint32_t>(localIP));
@@ -102,6 +103,9 @@ bool WireGuard::begin(const IPAddress& localIP,
 	wg.bind_netif = NULL;
 	wg.in_filter_fn = in_filter_fn;
 	wg.out_filter_fn = out_filter_fn;
+	wg.mtu = mtu;
+
+	printf("%u\n", mtu);
 
 	// Initialise the first WireGuard peer structure
 	wireguardif_peer_init(&peer);

@@ -1023,7 +1023,7 @@ err_t wireguardif_init(struct netif *netif) {
 	netif->output = wireguardif_output;
 	netif->linkoutput = NULL;
 	netif->hwaddr_len = 0;
-	netif->mtu = WIREGUARDIF_MTU;
+	netif->mtu = (init_data->mtu > 0) ? init_data->mtu : WIREGUARDIF_MTU;
 	// We set up no state flags here - caller should set them
 	// NETIF_FLAG_LINK_UP is automatically set/cleared when at least one peer is connected
 	netif->flags = 0;

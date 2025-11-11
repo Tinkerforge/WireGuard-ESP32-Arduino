@@ -54,7 +54,8 @@ public:
 	           // Optional preshared key for this connection.
 	           const char *preshared_key = nullptr,
 			   int (*in_filter_fn)(struct pbuf*) = nullptr,
-			   int (*out_filter_fn)(struct pbuf*) = nullptr);
+			   int (*out_filter_fn)(struct pbuf*) = nullptr,
+			   uint16_t mtu = WIREGUARDIF_MTU);
 
 	void end();
 	bool is_initialized() const { return this->_is_initialized; }
