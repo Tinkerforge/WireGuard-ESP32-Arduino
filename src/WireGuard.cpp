@@ -105,8 +105,6 @@ bool WireGuard::begin(const IPAddress& localIP,
 	wg.out_filter_fn = out_filter_fn;
 	wg.mtu = mtu;
 
-	printf("%u\n", mtu);
-
 	// Initialise the first WireGuard peer structure
 	wireguardif_peer_init(&peer);
 	// If we know the endpoint's address can add here
