@@ -16,7 +16,7 @@ class WireGuard
 {
 private:
 	bool _is_initialized = false;
-	struct netif wg_netif_struct;
+	struct netif wg_netif;
 	struct netif *previous_default_netif = NULL;
 	uint8_t wireguard_peer_index = WIREGUARDIF_INVALID_INDEX;
 
