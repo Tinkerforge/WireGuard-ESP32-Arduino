@@ -105,13 +105,11 @@ bool WireGuard::begin(const IPAddress& localIP,
 	wg.out_filter_fn = out_filter_fn;
 	wg.mtu = mtu;
 
-	// Initialise the first WireGuard peer structure
-	wireguardif_peer_init(&peer);
 	// If we know the endpoint's address can add here
 	const int64_t t_resolve_start_us = esp_timer_get_time();
 	bool success_get_endpoint_ip = false;
+	ip_addr_t endpoint_ip;
 	for(int retry = 0; retry < 5; retry++) {
-		ip_addr_t endpoint_ip = IPADDR4_INIT_BYTES(0, 0, 0, 0);
 		struct addrinfo *res = NULL;
 		struct addrinfo hint;
 		memset(&hint, 0, sizeof(hint));
@@ -139,7 +137,6 @@ bool WireGuard::begin(const IPAddress& localIP,
 		inet_addr_to_ip4addr(ip_2_ip4(&endpoint_ip), &addr4);
 		lwip_freeaddrinfo(res);
 
-		peer.endpoint_ip = endpoint_ip;
 		log_i(TAG "%s is %3d.%3d.%3d.%3d"
 			, remotePeerAddress
 			, (endpoint_ip.u_addr.ip4.addr >>  0) & 0xff
@@ -153,6 +150,10 @@ bool WireGuard::begin(const IPAddress& localIP,
 		log_e(TAG "failed to get endpoint ip.");
 		return false;
 	}
+
+	// Initialise the first WireGuard peer structure
+	wireguardif_peer_init(&peer);
+	peer.endpoint_ip = endpoint_ip;
 
 	netif_add_and_up_parameters params = {
 		ip_2_ip4(&ipaddr),
