@@ -154,6 +154,11 @@ bool WireGuard::begin(const IPAddress& localIP,
 	// Initialise the first WireGuard peer structure
 	wireguardif_peer_init(&peer);
 	peer.endpoint_ip = endpoint_ip;
+	peer.public_key = remotePeerPublicKey;
+	peer.preshared_key = preshared_key;
+	peer.allowed_ip = allowed_ip;
+	peer.allowed_mask = allowed_mask;
+	peer.endport_port = remotePeerPort;
 
 	netif_add_and_up_parameters params = {
 		ip_2_ip4(&ipaddr),
@@ -168,14 +173,6 @@ bool WireGuard::begin(const IPAddress& localIP,
 		return false;
 	}
 	this->wg_netif = &this->wg_netif_struct;
-
-	peer.public_key = remotePeerPublicKey;
-	peer.preshared_key = preshared_key;
-
-	peer.allowed_ip = allowed_ip;
-	peer.allowed_mask = allowed_mask;
-
-	peer.endport_port = remotePeerPort;
 
 	// Initialize the platform
 	wireguard_platform_init();
