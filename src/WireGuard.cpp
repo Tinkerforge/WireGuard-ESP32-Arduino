@@ -28,9 +28,9 @@ extern "C" {
 extern u8_t wg_netif_client_id;
 
 struct netif_add_and_up_parameters {
-	const ip4_addr_t *ipaddr;
-	const ip4_addr_t *netmask;
-	const ip4_addr_t *gw;
+	const ip4_addr_t ipaddr;
+	const ip4_addr_t netmask;
+	const ip4_addr_t gw;
 	struct netif *wg_netif;
 	void *state;
 };
@@ -52,7 +52,7 @@ static esp_err_t netif_add_and_up_in_lwip_ctx(void *ctx) {
 	#endif
 
 	// Register the new WireGuard network interface with lwIP
-	if (netif_add(param->wg_netif, param->ipaddr, param->netmask, param->gw, param->state, &wireguardif_init, &ip_input) == nullptr) {
+	if (netif_add(param->wg_netif, &param->ipaddr, &param->netmask, &param->gw, param->state, &wireguardif_init, &ip_input) == nullptr) {
 		return ESP_FAIL;
 	}
 
@@ -85,12 +85,6 @@ bool WireGuard::begin(const IPAddress& localIP,
 					  uint16_t mtu) {
 	struct wireguardif_init_data wg;
 	struct wireguardif_peer peer;
-	ip_addr_t ipaddr = IPADDR4_INIT(static_cast<uint32_t>(localIP));
-	ip_addr_t netmask = IPADDR4_INIT(static_cast<uint32_t>(Subnet));
-	ip_addr_t gateway = IPADDR4_INIT(static_cast<uint32_t>(Gateway));
-	ip_addr_t allowed_ip = IPADDR4_INIT(static_cast<uint32_t>(allowedIP));
-	ip_addr_t allowed_mask = IPADDR4_INIT(static_cast<uint32_t>(allowedMask));
-
 	assert(privateKey != NULL);
 	assert(remotePeerAddress != NULL);
 	assert(remotePeerPublicKey != NULL);
@@ -156,14 +150,14 @@ bool WireGuard::begin(const IPAddress& localIP,
 	peer.endpoint_ip = endpoint_ip;
 	peer.public_key = remotePeerPublicKey;
 	peer.preshared_key = preshared_key;
-	peer.allowed_ip = allowed_ip;
-	peer.allowed_mask = allowed_mask;
+	peer.allowed_ip = IPADDR4_INIT(static_cast<uint32_t>(allowedIP));
+	peer.allowed_mask = IPADDR4_INIT(static_cast<uint32_t>(allowedMask));;
 	peer.endport_port = remotePeerPort;
 
 	netif_add_and_up_parameters params = {
-		ip_2_ip4(&ipaddr),
-		ip_2_ip4(&netmask),
-		ip_2_ip4(&gateway),
+		{static_cast<uint32_t>(localIP)},
+		{static_cast<uint32_t>(Subnet)},
+		{static_cast<uint32_t>(Gateway)},
 		&this->wg_netif_struct,
 		&wg,
 	};
