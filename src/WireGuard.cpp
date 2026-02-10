@@ -83,21 +83,10 @@ bool WireGuard::begin(const IPAddress& localIP,
 					  int (*in_filter_fn)(struct pbuf*),
 					  int (*out_filter_fn)(struct pbuf*),
 					  uint16_t mtu) {
-	struct wireguardif_init_data wg;
-	struct wireguardif_peer peer;
 	assert(privateKey != NULL);
 	assert(remotePeerAddress != NULL);
 	assert(remotePeerPublicKey != NULL);
 	assert(remotePeerPort != 0);
-
-	// Setup the WireGuard device structure
-	wg.private_key = privateKey;
-	wg.listen_port = localPort;
-
-	wg.bind_netif = NULL;
-	wg.in_filter_fn = in_filter_fn;
-	wg.out_filter_fn = out_filter_fn;
-	wg.mtu = mtu;
 
 	// If we know the endpoint's address can add here
 	const int64_t t_resolve_start_us = esp_timer_get_time();
@@ -146,6 +135,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 	}
 
 	// Initialise the first WireGuard peer structure
+	struct wireguardif_peer peer;
 	wireguardif_peer_init(&peer);
 	peer.endpoint_ip = endpoint_ip;
 	peer.public_key = remotePeerPublicKey;
@@ -153,6 +143,15 @@ bool WireGuard::begin(const IPAddress& localIP,
 	peer.allowed_ip = IPADDR4_INIT(static_cast<uint32_t>(allowedIP));
 	peer.allowed_mask = IPADDR4_INIT(static_cast<uint32_t>(allowedMask));;
 	peer.endport_port = remotePeerPort;
+
+	// Setup the WireGuard device structure
+	struct wireguardif_init_data wg;
+	wg.private_key = privateKey;
+	wg.listen_port = localPort;
+	wg.bind_netif = NULL;
+	wg.in_filter_fn = in_filter_fn;
+	wg.out_filter_fn = out_filter_fn;
+	wg.mtu = mtu;
 
 	netif_add_and_up_parameters params = {
 		{static_cast<uint32_t>(localIP)},
