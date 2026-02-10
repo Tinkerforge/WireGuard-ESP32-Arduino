@@ -27,16 +27,18 @@ extern "C" {
 
 extern u8_t wg_netif_client_id;
 
-struct netif_add_and_up_parameters {
+struct begin_parameters {
 	const ip4_addr_t ipaddr;
 	const ip4_addr_t netmask;
 	const ip4_addr_t gw;
 	struct netif *wg_netif;
 	void *state;
+	uint8_t *wireguard_peer_index;
+	struct netif **previous_default_netif;
 };
 
-static esp_err_t netif_add_and_up_in_lwip_ctx(void *ctx) {
-	netif_add_and_up_parameters *param = static_cast<netif_add_and_up_parameters *>(ctx);
+static esp_err_t begin_in_lwip_ctx(void *ctx) {
+	begin_parameters *param = static_cast<begin_parameters *>(ctx);
 
 	if (wg_netif_client_id == 0xFF) {
 		wg_netif_client_id = netif_alloc_client_data_id();
@@ -58,6 +60,21 @@ static esp_err_t netif_add_and_up_in_lwip_ctx(void *ctx) {
 
 	// Mark the interface as administratively up, link up flag is set automatically when peer connects
 	netif_set_up(param->wg_netif);
+
+	// Initialize the platform
+	wireguard_platform_init();
+	// Register the new WireGuard peer with the netwok interface
+	wireguardif_add_peer(param->wg_netif, &peer, param->wireguard_peer_index);
+	if ((*param->wireguard_peer_index != WIREGUARDIF_INVALID_INDEX) && !ip_addr_isany(&peer.endpoint_ip)) {
+		// Start outbound connection to peer
+		log_i(TAG "connecting wireguard...");
+		wireguardif_connect(param->wg_netif, *param->wireguard_peer_index);
+		// Save the current default interface for restoring when shutting down the WG interface.
+		*param->previous_default_netif = netif_default;
+		// Set default interface to WG device.
+		if (make_default)
+			esp_netif_tcpip_exec(netif_set_default_in_lwip_ctx, param->wg_netif);
+	}
 
 	return ESP_OK;
 }
@@ -153,32 +170,19 @@ bool WireGuard::begin(const IPAddress& localIP,
 	wg.out_filter_fn = out_filter_fn;
 	wg.mtu = mtu;
 
-	netif_add_and_up_parameters params = {
+	begin_parameters params = {
 		{static_cast<uint32_t>(localIP)},
 		{static_cast<uint32_t>(Subnet)},
 		{static_cast<uint32_t>(Gateway)},
 		&this->wg_netif,
 		&wg,
+		&this->wireguard_peer_index,
+		&this->previous_default_netif
 	};
-	esp_err_t err = esp_netif_tcpip_exec(netif_add_and_up_in_lwip_ctx, &params);
+	esp_err_t err = esp_netif_tcpip_exec(begin_in_lwip_ctx, &params);
 	if (err != ESP_OK) {
 		log_e(TAG "failed to initialize WG netif.");
 		return false;
-	}
-
-	// Initialize the platform
-	wireguard_platform_init();
-	// Register the new WireGuard peer with the netwok interface
-	wireguardif_add_peer(&this->wg_netif, &peer, &this->wireguard_peer_index);
-	if ((this->wireguard_peer_index != WIREGUARDIF_INVALID_INDEX) && !ip_addr_isany(&peer.endpoint_ip)) {
-		// Start outbound connection to peer
-		log_i(TAG "connecting wireguard...");
-		wireguardif_connect(&this->wg_netif, this->wireguard_peer_index);
-		// Save the current default interface for restoring when shutting down the WG interface.
-		this->previous_default_netif = netif_default;
-		// Set default interface to WG device.
-		if (make_default)
-			esp_netif_tcpip_exec(netif_set_default_in_lwip_ctx, &this->wg_netif);
 	}
 
 	this->_is_initialized = true;
