@@ -35,6 +35,8 @@ struct begin_parameters {
 	void *state;
 	uint8_t *wireguard_peer_index;
 	struct netif **previous_default_netif;
+	struct wireguardif_peer *peer;
+	bool make_default;
 };
 
 static esp_err_t begin_in_lwip_ctx(void *ctx) {
@@ -64,16 +66,16 @@ static esp_err_t begin_in_lwip_ctx(void *ctx) {
 	// Initialize the platform
 	wireguard_platform_init();
 	// Register the new WireGuard peer with the netwok interface
-	wireguardif_add_peer(param->wg_netif, &peer, param->wireguard_peer_index);
-	if ((*param->wireguard_peer_index != WIREGUARDIF_INVALID_INDEX) && !ip_addr_isany(&peer.endpoint_ip)) {
+	wireguardif_add_peer(param->wg_netif, param->peer, param->wireguard_peer_index);
+	if ((*param->wireguard_peer_index != WIREGUARDIF_INVALID_INDEX) && !ip_addr_isany(&param->peer->endpoint_ip)) {
 		// Start outbound connection to peer
 		log_i(TAG "connecting wireguard...");
 		wireguardif_connect(param->wg_netif, *param->wireguard_peer_index);
 		// Save the current default interface for restoring when shutting down the WG interface.
 		*param->previous_default_netif = netif_default;
 		// Set default interface to WG device.
-		if (make_default)
-			esp_netif_tcpip_exec(netif_set_default_in_lwip_ctx, param->wg_netif);
+		if (param->make_default)
+			netif_set_default(param->wg_netif);
 	}
 
 	return ESP_OK;
@@ -177,7 +179,9 @@ bool WireGuard::begin(const IPAddress& localIP,
 		&this->wg_netif,
 		&wg,
 		&this->wireguard_peer_index,
-		&this->previous_default_netif
+		&this->previous_default_netif,
+		&peer,
+		make_default
 	};
 	esp_err_t err = esp_netif_tcpip_exec(begin_in_lwip_ctx, &params);
 	if (err != ESP_OK) {
@@ -189,13 +193,30 @@ bool WireGuard::begin(const IPAddress& localIP,
 	return true;
 }
 
-static esp_err_t shutdown_and_remove_in_lwip_ctx(void *ctx) {
-	netif *nif = static_cast<netif *>(ctx);
+
+struct end_parameters {
+	struct netif **previous_default_netif;
+	struct netif *wg_netif;
+	uint8_t *wireguard_peer_index;
+};
+
+static esp_err_t end_in_lwip_ctx(void *ctx) {
+	end_parameters *param = static_cast<end_parameters *>(ctx);
+
+	// Restore the default interface.
+	netif_set_default(*param->previous_default_netif);
+	*param->previous_default_netif = nullptr;
+
+	// Disconnect the WG interface.
+	wireguardif_disconnect(param->wg_netif, *param->wireguard_peer_index);
+	// Remove peer from the WG interface
+	wireguardif_remove_peer(param->wg_netif, *param->wireguard_peer_index);
+	*param->wireguard_peer_index = WIREGUARDIF_INVALID_INDEX;
 
 	// Shutdown the wireguard interface.
-	wireguardif_shutdown(nif);
+	wireguardif_shutdown(param->wg_netif);
 	// Remove the WG interface;
-	netif_remove(nif);
+	netif_remove(param->wg_netif);
 
 	return ESP_OK;
 }
@@ -203,16 +224,13 @@ static esp_err_t shutdown_and_remove_in_lwip_ctx(void *ctx) {
 void WireGuard::end() {
 	if( !this->_is_initialized ) return;
 
-	// Restore the default interface.
-	esp_netif_tcpip_exec(netif_set_default_in_lwip_ctx, this->previous_default_netif);
-	this->previous_default_netif = nullptr;
-	// Disconnect the WG interface.
-	wireguardif_disconnect(&this->wg_netif, this->wireguard_peer_index);
-	// Remove peer from the WG interface
-	wireguardif_remove_peer(&this->wg_netif, this->wireguard_peer_index);
-	this->wireguard_peer_index = WIREGUARDIF_INVALID_INDEX;
+	end_parameters params = {
+		&this->previous_default_netif,
+		&this->wg_netif,
+		&this->wireguard_peer_index
+	};
 
-	esp_netif_tcpip_exec(shutdown_and_remove_in_lwip_ctx, &this->wg_netif);
+	esp_netif_tcpip_exec(end_in_lwip_ctx, &params);
 
 	this->_is_initialized = false;
 }
