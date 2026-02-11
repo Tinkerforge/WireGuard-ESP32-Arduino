@@ -16,6 +16,8 @@ class WireGuard
 {
 private:
 	bool _is_initialized = false;
+
+	// Only access from LWIP TCP/IP thread!
 	struct netif wg_netif;
 	struct netif *previous_default_netif = NULL;
 	uint8_t wireguard_peer_index = WIREGUARDIF_INVALID_INDEX;
