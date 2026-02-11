@@ -106,6 +106,8 @@ bool WireGuard::begin(const IPAddress& localIP,
                       const char *preshared_key,
 					  int (*in_filter_fn)(struct pbuf*),
 					  int (*out_filter_fn)(struct pbuf*),
+					  void (*update_peer_info_fn)(uint8_t peer_index, bool up, const ip_addr_t *addr, uint16_t port, void *user_data),
+					  void *update_peer_info_fn_user_data,
 					  uint16_t mtu) {
 	assert(privateKey != NULL);
 	assert(remotePeerAddress != NULL);
@@ -175,6 +177,8 @@ bool WireGuard::begin(const IPAddress& localIP,
 	wg.bind_netif = NULL;
 	wg.in_filter_fn = in_filter_fn;
 	wg.out_filter_fn = out_filter_fn;
+	wg.update_peer_info_fn = update_peer_info_fn;
+	wg.update_peer_info_fn_user_data = update_peer_info_fn_user_data;
 	wg.mtu = mtu;
 
 	begin_parameters params = {
@@ -241,12 +245,6 @@ void WireGuard::end() {
 
 	this->_is_initialized = false;
 }
-
-bool WireGuard::is_peer_up(ip_addr_t *current_ip, uint16_t *current_port) {
-	if (!this->_is_initialized) return false;
-
-	return wireguardif_peer_is_up(&this->wg_netif, this->wireguard_peer_index, current_ip, current_port) == ERR_OK;
-};
 
 WireGuard::WireGuard() {
 	bzero(&this->wg_netif, sizeof(this->wg_netif));

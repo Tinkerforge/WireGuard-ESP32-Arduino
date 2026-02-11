@@ -191,6 +191,15 @@ struct wireguard_device {
 	int (*in_filter_fn)(struct pbuf*);
 	int (*out_filter_fn)(struct pbuf*);
 
+	struct wireguard_peer_info {
+		ip_addr_t addr;
+		uint16_t port;
+		bool up;
+	} peer_infos[WIREGUARD_MAX_PEERS];
+
+	void (*update_peer_info_fn)(uint8_t peer_index, bool up, const ip_addr_t *addr, uint16_t port, void *user_data);
+	void *update_peer_info_fn_user_data;
+
 	bool valid;
 };
 

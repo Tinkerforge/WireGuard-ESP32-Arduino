@@ -56,12 +56,12 @@ public:
 	           const char *preshared_key = nullptr,
 			   int (*in_filter_fn)(struct pbuf*) = nullptr,
 			   int (*out_filter_fn)(struct pbuf*) = nullptr,
+			   void (*update_peer_info_fn)(uint8_t peer_index, bool up, const ip_addr_t *addr, uint16_t port, void *user_data) = nullptr,
+			   void *update_peer_info_fn_user_data = nullptr,
 			   uint16_t mtu = WIREGUARDIF_MTU);
 
 	void end();
 	bool is_initialized() const { return this->_is_initialized; }
-
-	bool is_peer_up(ip_addr_t *current_ip, uint16_t *current_port);
 
 	static bool derive_public_key(uint8_t *public_key, const uint8_t *private_key);
 };

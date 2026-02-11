@@ -908,6 +908,19 @@ static void wireguardif_tmr(void *arg) {
 			if ((peer->curr_keypair.valid) || (peer->prev_keypair.valid)) {
 				link_up = true;
 			}
+
+			if (device->update_peer_info_fn != NULL) {
+				uint8_t peer_idx = wireguard_peer_index(device, peer);
+				bool up = peer->curr_keypair.valid;
+				struct wireguard_peer_info *info = &device->peer_infos[peer_idx];
+
+				if (info->up != up || memcmp(&info->addr, &peer->ip, sizeof(info->addr)) != 0 || info->port != peer->port) {
+					info->up = up;
+					info->addr = peer->ip;
+					info->port = peer->port;
+					device->update_peer_info_fn(peer_idx, info->up, &info->addr, info->port, device->update_peer_info_fn_user_data);
+				}
+			}
 		}
 	}
 
@@ -1002,6 +1015,8 @@ err_t wireguardif_init(struct netif *netif) {
 	device->udp_pcb = udp;
 	device->in_filter_fn = init_data->in_filter_fn;
 	device->out_filter_fn = init_data->out_filter_fn;
+	device->update_peer_info_fn = init_data->update_peer_info_fn;
+	device->update_peer_info_fn_user_data = init_data->update_peer_info_fn_user_data;
 	log_d(TAG "start device initialization");
 	// Per-wireguard netif/device setup
 	uint32_t t1 = wireguard_sys_now();

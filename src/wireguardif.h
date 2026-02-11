@@ -60,6 +60,8 @@ struct wireguardif_init_data {
 	u16_t mtu;
 	int (*in_filter_fn)(struct pbuf*);
 	int (*out_filter_fn)(struct pbuf*);
+	void (*update_peer_info_fn)(uint8_t peer_index, bool up, const ip_addr_t *addr, uint16_t port, void *user_data);
+	void *update_peer_info_fn_user_data;
 };
 
 struct wireguardif_peer {
