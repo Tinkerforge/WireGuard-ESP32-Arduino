@@ -42,6 +42,9 @@ struct begin_parameters {
 static esp_err_t begin_in_lwip_ctx(void *ctx) {
 	begin_parameters *param = static_cast<begin_parameters *>(ctx);
 
+	// Initialize the platform first
+	wireguard_platform_init();
+
 	if (wg_netif_client_id == 0xFF) {
 		wg_netif_client_id = netif_alloc_client_data_id();
 	}
@@ -63,8 +66,6 @@ static esp_err_t begin_in_lwip_ctx(void *ctx) {
 	// Mark the interface as administratively up, link up flag is set automatically when peer connects
 	netif_set_up(param->wg_netif);
 
-	// Initialize the platform
-	wireguard_platform_init();
 	// Register the new WireGuard peer with the netwok interface
 	wireguardif_add_peer(param->wg_netif, param->peer, param->wireguard_peer_index);
 	if ((*param->wireguard_peer_index != WIREGUARDIF_INVALID_INDEX) && !ip_addr_isany(&param->peer->endpoint_ip)) {
