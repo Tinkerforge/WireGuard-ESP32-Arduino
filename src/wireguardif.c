@@ -899,9 +899,6 @@ static void wireguardif_tmr(void *arg) {
 				keypair_destroy(&peer->curr_keypair);
 			}
 			if (should_send_keepalive(peer)) {
-				if (device->update_peer_info_fn != NULL) {
-					device->update_peer_info_fn(wireguard_peer_index(device, peer), true, &peer->ip, peer->port, device->update_peer_info_fn_user_data);
-				}
 				wireguardif_send_keepalive(device, peer);
 			}
 			if (should_send_initiation(peer)) {
