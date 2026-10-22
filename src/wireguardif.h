@@ -127,6 +127,22 @@ void wireguardif_peer_init(struct wireguardif_peer *peer);
 // On success the peer_index can be used to reference this peer in future function calls
 err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *peer, u8_t *peer_index);
 
+// Add a copied IPv4 (/0..32) or IPv6 (/0..128) allowed prefix to a peer.
+// Used for both outgoing destination selection and incoming source validation.
+// Returns ERR_MEM when the peer's fixed-size prefix table is full.
+err_t wireguardif_add_allowed_ip(struct netif *netif, u8_t peer_index, const ip_addr_t *ip, u8_t prefix_length);
+
+#if LWIP_IPV6
+// Configure one static unicast tunnel address (no SLAAC or DAD). MTU must be >=1280.
+err_t wireguardif_set_ip6_address(struct netif *netif, const ip6_addr_t *address);
+
+// Optional routing helper: returns netif if up and a peer allows destination,
+// otherwise NULL. Call from the application's IPv6 routing hook; installs no hook.
+struct netif *wireguardif_route_ip6(struct netif *netif, const ip6_addr_t *destination);
+#endif
+
+// Like other raw lwIP interface APIs, all functions above require TCP/IP context.
+
 // Remove the given peer from the network interface
 err_t wireguardif_remove_peer(struct netif *netif, u8_t peer_index);
 

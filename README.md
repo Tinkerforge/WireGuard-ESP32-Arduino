@@ -46,6 +46,20 @@ wg.begin(
 
 You can see an example sketch `uptime_post.ino`, which connects SORACOM Arc WireGuard endpoint and post uptime to SORACOM Harvest via WireGuard connection.
 
+## IPv6 inside the tunnel
+
+Existing `begin()` calls remain supported. After a successful `begin()`, add a
+static IPv6 tunnel address and the peer's IPv6 allowed prefixes:
+
+```c++
+bool ok = wg.setIPv6Address("fd42:7::2") &&
+          wg.addAllowedIP("fd42:7::1", 128);
+```
+
+The peer can carry both IPv4 and IPv6. IPv6 UDP and ICMPv6 use lwIP; the encrypted
+endpoint connection remains IPv4. See [IPv6 setup and routing](docs/ipv6.md)
+and the [IPv6 UDP example](examples/ipv6_udp/ipv6_udp.ino).
+
 ## License
 
 The original WireGuard implementation for lwIP is licensed under BSD 3 clause license so the code in this repository also licensed under the same license.

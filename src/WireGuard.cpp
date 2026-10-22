@@ -67,7 +67,11 @@ static esp_err_t begin_in_lwip_ctx(void *ctx) {
 	netif_set_up(param->wg_netif);
 
 	// Register the new WireGuard peer with the netwok interface
-	wireguardif_add_peer(param->wg_netif, param->peer, param->wireguard_peer_index);
+	if (wireguardif_add_peer(param->wg_netif, param->peer, param->wireguard_peer_index) != ERR_OK) {
+		wireguardif_shutdown(param->wg_netif);
+		netif_remove(param->wg_netif);
+		return ESP_FAIL;
+	}
 	if ((*param->wireguard_peer_index != WIREGUARDIF_INVALID_INDEX) && !ip_addr_isany(&param->peer->endpoint_ip)) {
 		// Start outbound connection to peer
 		log_i(TAG "connecting wireguard...");
@@ -114,6 +118,9 @@ bool WireGuard::begin(const IPAddress& localIP,
 	assert(remotePeerAddress != NULL);
 	assert(remotePeerPublicKey != NULL);
 	assert(remotePeerPort != 0);
+	if (this->_is_initialized) {
+		return false;
+	}
 
 	// If we know the endpoint's address can add here
 	const int64_t t_resolve_start_us = esp_timer_get_time();
@@ -123,6 +130,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 		struct addrinfo *res = NULL;
 		struct addrinfo hint;
 		memset(&hint, 0, sizeof(hint));
+		hint.ai_family = AF_INET; // The encrypted outer transport stays IPv4.
 		memset(&endpoint_ip, 0, sizeof(endpoint_ip));
 
 		const int64_t t_lookup_start_us = esp_timer_get_time();
@@ -145,6 +153,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 		success_get_endpoint_ip = true;
 		struct in_addr addr4 = ((struct sockaddr_in *) (res->ai_addr))->sin_addr;
 		inet_addr_to_ip4addr(ip_2_ip4(&endpoint_ip), &addr4);
+		IP_SET_TYPE_VAL(endpoint_ip, IPADDR_TYPE_V4);
 		lwip_freeaddrinfo(res);
 
 		log_i(TAG "%s is %3d.%3d.%3d.%3d"
@@ -168,7 +177,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 	peer.public_key = remotePeerPublicKey;
 	peer.preshared_key = preshared_key;
 	peer.allowed_ip = IPADDR4_INIT(static_cast<uint32_t>(allowedIP));
-	peer.allowed_mask = IPADDR4_INIT(static_cast<uint32_t>(allowedMask));;
+	peer.allowed_mask = IPADDR4_INIT(static_cast<uint32_t>(allowedMask));
 	peer.endport_port = remotePeerPort;
 
 	// Setup the WireGuard device structure
@@ -202,6 +211,58 @@ bool WireGuard::begin(const IPAddress& localIP,
 	this->_is_initialized = true;
 	return true;
 }
+
+struct address_parameters {
+	struct netif *netif;
+	ip_addr_t address;
+	uint8_t peer_index;
+	uint8_t prefix_length;
+};
+
+static esp_err_t add_allowed_ip_in_lwip_ctx(void *ctx) {
+	address_parameters *param = static_cast<address_parameters *>(ctx);
+	return wireguardif_add_allowed_ip(param->netif, param->peer_index, &param->address,
+	                                 param->prefix_length) == ERR_OK ? ESP_OK : ESP_FAIL;
+}
+
+bool WireGuard::addAllowedIP(const char* network, uint8_t prefixLength) {
+	address_parameters param = {};
+	if (!this->_is_initialized || !network || !ipaddr_aton(network, &param.address)) {
+		return false;
+	}
+	param.netif = &this->wg_netif;
+	param.peer_index = this->wireguard_peer_index;
+	param.prefix_length = prefixLength;
+	return esp_netif_tcpip_exec(add_allowed_ip_in_lwip_ctx, &param) == ESP_OK;
+}
+
+#if LWIP_IPV6
+static esp_err_t set_ip6_address_in_lwip_ctx(void *ctx) {
+	address_parameters *param = static_cast<address_parameters *>(ctx);
+	return wireguardif_set_ip6_address(param->netif, ip_2_ip6(&param->address)) == ERR_OK ? ESP_OK : ESP_FAIL;
+}
+#endif
+
+bool WireGuard::setIPv6Address(const char* address) {
+#if LWIP_IPV6
+	address_parameters param = {};
+	if (!this->_is_initialized || !address || !ipaddr_aton(address, &param.address) ||
+			!IP_IS_V6(&param.address)) {
+		return false;
+	}
+	param.netif = &this->wg_netif;
+	return esp_netif_tcpip_exec(set_ip6_address_in_lwip_ctx, &param) == ESP_OK;
+#else
+	(void)address;
+	return false;
+#endif
+}
+
+#if LWIP_IPV6
+struct netif* WireGuard::routeIPv6(const ip6_addr_t* destination) const {
+	return this->_is_initialized ? wireguardif_route_ip6(const_cast<struct netif*>(&this->wg_netif), destination) : nullptr;
+}
+#endif
 
 
 struct end_parameters {

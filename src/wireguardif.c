@@ -44,6 +44,9 @@
 #include "lwip/mem.h"
 #include "lwip/sys.h"
 #include "lwip/timeouts.h"
+#if LWIP_IPV6
+#include "lwip/priv/nd6_priv.h"
+#endif
 
 #include "wireguard.h"
 #include "crypto.h"
@@ -59,9 +62,65 @@
 // This ID is shared between all WireGuard instances.
 u8_t wg_netif_client_id = 0xFF;
 
+static void wireguardif_set_link_up(struct netif *netif) {
+	netif_set_link_up(netif);
+#if LWIP_IPV6 && LWIP_IPV6_SEND_ROUTER_SOLICIT
+	// lwIP restarts router solicitation on link-up. This is a static L3 tunnel
+	// with no router discovery; its peer is selected through WireGuard.
+	netif->rs_count = 0;
+#endif
+}
+
 static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr, u16_t port) {
 	peer->ip = *addr;
 	peer->port = port;
+}
+
+// Address bytes are in network order. Never include an IPv6 zone in a prefix.
+static const uint8_t *address_bytes(const ip_addr_t *ip, size_t *length) {
+#if LWIP_IPV4
+	if (IP_IS_V4(ip)) {
+		*length = 4;
+		return (const uint8_t *)&ip_2_ip4(ip)->addr;
+	}
+#endif
+#if LWIP_IPV6
+	if (IP_IS_V6(ip)) {
+		*length = 16;
+		return (const uint8_t *)ip_2_ip6(ip)->addr;
+	}
+#endif
+	*length = 0;
+	return NULL;
+}
+
+// Byte masks also preserve the legacy IPv4 address/netmask API.
+static bool allowed_ip_matches(const struct wireguard_allowed_ip *allowed, const ip_addr_t *ip) {
+	if (!allowed->valid || IP_GET_TYPE(ip) != IP_GET_TYPE(&allowed->ip) ||
+			IP_GET_TYPE(ip) != IP_GET_TYPE(&allowed->mask)) {
+		return false;
+	}
+
+	// This is safe since it is previously checked that the types match. The length is the same for all three addresses.
+	size_t length;
+	const uint8_t *address = address_bytes(ip, &length);
+	const uint8_t *network = address_bytes(&allowed->ip, &length);
+	const uint8_t *mask = address_bytes(&allowed->mask, &length);
+	for (size_t i = 0; i < length; i++) {
+		if ((address[i] & mask[i]) != (network[i] & mask[i])) {
+			return false;
+		}
+	}
+	return length != 0;
+}
+
+static bool peer_allows_ip(const struct wireguard_peer *peer, const ip_addr_t *ip) {
+	for (int i = 0; i < WIREGUARD_MAX_SRC_IPS; i++) {
+		if (allowed_ip_matches(&peer->allowed_source_ips[i], ip)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device *device, const ip_addr_t *ipaddr) {
@@ -69,22 +128,13 @@ static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device 
 		return NULL;
 	}
 
-	struct wireguard_peer *result = NULL;
-	struct wireguard_peer *tmp;
-	int x;
-	int y;
-	for (x=0; (!result) && (x < WIREGUARD_MAX_PEERS); x++) {
-		tmp = &device->peers[x];
-		if (tmp->valid) {
-			for (y=0; y < WIREGUARD_MAX_SRC_IPS; y++) {
-				if ((tmp->allowed_source_ips[y].valid) && ip_addr_netcmp(ipaddr, &tmp->allowed_source_ips[y].ip, ip_2_ip4(&tmp->allowed_source_ips[y].mask))) {
-					result = tmp;
-					break;
-				}
-			}
+	for (int i = 0; i < WIREGUARD_MAX_PEERS; i++) {
+		struct wireguard_peer *peer = &device->peers[i];
+		if (peer->valid && peer_allows_ip(peer, ipaddr)) {
+			return peer;
 		}
 	}
-	return result;
+	return NULL;
 }
 
 static bool wireguardif_can_send_initiation(struct wireguard_peer *peer) {
@@ -201,22 +251,70 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 
 // This is used as the output function for the Wireguard netif
 // The ipaddr here is the one inside the VPN which we use to lookup the correct peer/endpoint
-static err_t wireguardif_output(struct netif *netif, struct pbuf *q, const ip4_addr_t *ip4addr) {
+#if LWIP_IPV6
+// lwIP 2.1 normally creates these entries in Ethernet neighbour resolution.
+// A layer-3 tunnel bypasses that path, but lwIP's ICMPv6 Packet Too Big handler
+// requires an existing destination entry to update PMTU. Seed only this cache;
+// no neighbour entries, solicitations, or queued Ethernet packets are needed.
+static void wireguardif_track_ip6_destination(struct netif *netif, const ip6_addr_t *destination) {
+	if (ip6_addr_isany(destination) || ip6_addr_ismulticast(destination)) {
+		return;
+	}
+	int slot = 0;
+	for (int i = 0; i < LWIP_ND6_NUM_DESTINATIONS; i++) {
+		if (ip6_addr_cmp(&destination_cache[i].destination_addr, destination)) {
+			destination_cache[i].age = 0;
+			return; // Preserve PMTU learned by lwIP.
+		}
+		if (ip6_addr_isany(&destination_cache[i].destination_addr) ||
+				(!ip6_addr_isany(&destination_cache[slot].destination_addr) &&
+				 destination_cache[i].age >= destination_cache[slot].age)) {
+			slot = i;
+		}
+	}
+	struct nd6_destination_cache_entry *entry = &destination_cache[slot];
+	ip6_addr_copy(entry->destination_addr, *destination);
+	ip6_addr_copy(entry->next_hop_addr, *destination);
+	entry->pmtu = netif_mtu6(netif);
+	entry->age = 0;
+}
+#endif
+
+static err_t wireguardif_output_ip(struct netif *netif, struct pbuf *q, const ip_addr_t *ipaddr) {
 	struct wireguard_device *device = (struct wireguard_device *) netif_get_client_data(netif, wg_netif_client_id);
 	// Send to peer that matches dest IP
-	ip_addr_t ipaddr;
-	ip_addr_copy_from_ip4(ipaddr, *ip4addr);
-	struct wireguard_peer *peer = peer_lookup_by_allowed_ip(device, &ipaddr);
+	struct wireguard_peer *peer = peer_lookup_by_allowed_ip(device, ipaddr);
 	if (peer) {
 		int filter_err = device->out_filter_fn == NULL ? 0 : device->out_filter_fn(q);
 		if (filter_err != 0) {
 			return filter_err;
 		}
-		return wireguardif_output_to_peer(netif, q, &ipaddr, peer);
+#if LWIP_IPV6
+		if (IP_IS_V6(ipaddr)) {
+			wireguardif_track_ip6_destination(netif, ip_2_ip6(ipaddr));
+		}
+#endif
+		return wireguardif_output_to_peer(netif, q, ipaddr, peer);
 	} else {
 		return ERR_RTE;
 	}
 }
+
+#if LWIP_IPV4
+static err_t wireguardif_output(struct netif *netif, struct pbuf *q, const ip4_addr_t *destination) {
+	ip_addr_t ip;
+	ip_addr_copy_from_ip4(ip, *destination);
+	return wireguardif_output_ip(netif, q, &ip);
+}
+#endif
+
+#if LWIP_IPV6
+static err_t wireguardif_output_ip6(struct netif *netif, struct pbuf *q, const ip6_addr_t *destination) {
+	ip_addr_t ip;
+	ip_addr_copy_from_ip6(ip, *destination);
+	return wireguardif_output_ip(netif, q, &ip);
+}
+#endif
 
 static void wireguardif_send_keepalive(struct wireguard_device *device, struct wireguard_peer *peer) {
 	// Send a NULL packet as a keep-alive
@@ -234,7 +332,7 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 		wireguardif_send_keepalive(device, peer);
 
 		// Set the IF-UP flag on netif
-		netif_set_link_up(device->netif);
+		wireguardif_set_link_up(device->netif);
 	} else {
 		// Packet bad
 		log_i(TAG "bad handshake from %08x:%d", addr->u_addr.ip4.addr, port);
@@ -269,18 +367,61 @@ static bool peer_add_ip(struct wireguard_peer *peer, ip_addr_t ip, ip_addr_t mas
 	return result;
 }
 
+// Decrypted packets are contiguous PBUF_RAM. Read bytes only after checking the
+// base header, avoiding alignment assumptions and IPv4 macros on IPv6 headers.
+// Transport and extension headers are validated by lwIP, not by WireGuard.
+static bool parse_inner_packet(const uint8_t *packet, size_t length, ip_addr_t *source, u16_t *packet_length) {
+	if (length == 0) {
+		return false;
+	}
+	size_t size;
+#if LWIP_IPV4
+	if ((packet[0] >> 4) == 4) {
+		if (length < 20) {
+			return false;
+		}
+		size_t header_length = (packet[0] & 15) * 4;
+		size = ((size_t)packet[2] << 8) | packet[3];
+		if (header_length < 20 || size < header_length || size > length) {
+			return false;
+		}
+		ip_addr_set_zero_ip4(source);
+		memcpy(&ip_2_ip4(source)->addr, packet + 12, 4);
+	} else
+#endif
+#if LWIP_IPV6
+	if ((packet[0] >> 4) == 6) {
+		if (length < 40) {
+			return false;
+		}
+		size = 40 + (((size_t)packet[4] << 8) | packet[5]);
+		// lwIP pbuf lengths are 16 bit; jumbograms are not supported.
+		if (size > length || size > 0xFFFF) {
+			return false;
+		}
+		ip_addr_set_zero_ip6(source);
+		memcpy(ip_2_ip6(source)->addr, packet + 8, 16);
+	} else
+#endif
+	{
+		return false;
+	}
+	*packet_length = (u16_t)size;
+	return true;
+}
+
 static void wireguardif_process_data_message(struct wireguard_device *device, struct wireguard_peer *peer, struct message_transport_data *data_hdr, size_t data_len, const ip_addr_t *addr, u16_t port) {
 	struct wireguard_keypair *keypair;
 	uint64_t nonce;
 	uint8_t *src;
 	size_t src_len;
 	struct pbuf *pbuf;
-	struct ip_hdr *iphdr;
-	ip_addr_t dest;
-	bool dest_ok = false;
-	int x;
+	ip_addr_t source;
 	uint32_t now;
-	uint16_t header_len = 0xFFFF;
+	u16_t packet_length;
+	if (data_len < WIREGUARD_AUTHTAG_LEN || data_len - WIREGUARD_AUTHTAG_LEN > 0xFFFF) {
+		return;
+	}
 	uint32_t idx = data_hdr->receiver;
 
 	keypair = get_peer_keypair_for_idx(peer, idx);
@@ -321,54 +462,20 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 					}
 
 					// Make sure that link is reported as up
-					netif_set_link_up(device->netif);
+					wireguardif_set_link_up(device->netif);
 
-					if (pbuf->tot_len > 0) {
-						//4a. Once the packet payload is decrypted, the interface has a plaintext packet. If this is not an IP packet, it is dropped.
-						iphdr = (struct ip_hdr *)pbuf->payload;
-						// Check for packet replay / dupes
-						if (wireguard_check_replay(keypair, nonce)) {
-
-							// 4b. Otherwise, WireGuard checks to see if the source IP address of the plaintext inner-packet routes correspondingly in the cryptokey routing table
-							// Also check packet length!
-#if LWIP_IPV4
-							if (IPH_V(iphdr) == 4) {
-								ip_addr_copy_from_ip4(dest, iphdr->dest);
-								for (x=0; x < WIREGUARD_MAX_SRC_IPS; x++) {
-									if (peer->allowed_source_ips[x].valid) {
-										if (ip_addr_netcmp(&dest, &peer->allowed_source_ips[x].ip, ip_2_ip4(&peer->allowed_source_ips[x].mask))) {
-											dest_ok = true;
-											header_len = PP_NTOHS(IPH_LEN(iphdr));
-											break;
-										}
-									}
-								}
+					// Authenticate before replay checks and inner source validation.
+					// A zero-length plaintext is a WireGuard keepalive.
+					if (wireguard_check_replay(keypair, nonce) && pbuf->tot_len > 0 &&
+							parse_inner_packet(pbuf->payload, pbuf->tot_len, &source, &packet_length) &&
+							peer_allows_ip(peer, &source)) {
+						// Strip authenticated WireGuard padding before filters and lwIP.
+						pbuf_realloc(pbuf, packet_length);
+						if (device->in_filter_fn == NULL || device->in_filter_fn(pbuf) == 0) {
+							if (device->netif->input(pbuf, device->netif) == ERR_OK) {
+								// The input function owns accepted pbufs.
+								pbuf = NULL;
 							}
-#endif /* LWIP_IPV4 */
-#if LWIP_IPV6
-							if (IPH_V(iphdr) == 6) {
-								// TODO: IPV6 support for route filtering
-								header_len = PP_NTOHS(IPH_LEN(iphdr));
-								dest_ok = true;
-							}
-#endif /* LWIP_IPV6 */
-							if (header_len <= pbuf->tot_len) {
-
-								// 5. If the plaintext packet has not been dropped, it is inserted into the receive queue of the wg0 interface.
-								if (dest_ok) {
-									// Check if we have a custom filter function and if the filter funtion allows sending the packet
-									if (device->in_filter_fn == NULL || device->in_filter_fn(pbuf) == 0) {
-										// Send packet to be process by LWIP
-										ip_input(pbuf, device->netif);
-										// pbuf is owned by IP layer now
-										pbuf = NULL;
-									}
-								}
-							} else {
-								// IP header is corrupt or lied about packet size
-							}
-						} else {
-							// This is a duplicate packet / replayed / too far out of order
 						}
 					} else {
 						// This was a keep-alive packet
@@ -677,6 +784,98 @@ static err_t wireguardif_lookup_peer(struct netif *netif, u8_t peer_index, struc
 	*out = peer;
 	return result;
 }
+
+err_t wireguardif_add_allowed_ip(struct netif *netif, u8_t peer_index, const ip_addr_t *ip, u8_t prefix_length) {
+	if (!ip) {
+		return ERR_ARG;
+	}
+	size_t length;
+	if (!address_bytes(ip, &length) || prefix_length > length * 8) {
+		return ERR_ARG;
+	}
+	struct wireguard_peer *peer;
+	err_t result = wireguardif_lookup_peer(netif, peer_index, &peer);
+	if (result != ERR_OK) {
+		return result;
+	}
+	ip_addr_t mask;
+	memset(&mask, 0, sizeof(mask));
+	IP_SET_TYPE_VAL(mask, IP_GET_TYPE(ip));
+	uint8_t *bytes = (uint8_t *)address_bytes(&mask, &length);
+	for (size_t i = 0; i < length; i++) {
+		int bits = (int)prefix_length - (int)i * 8;
+		bytes[i] = bits >= 8 ? 0xFF : bits > 0 ? (uint8_t)(0xFF << (8 - bits)) : 0;
+	}
+	// Canonicalize host bits so duplicate prefixes do not consume extra slots.
+	ip_addr_t network = *ip;
+	uint8_t *network_bytes = (uint8_t *)address_bytes(&network, &length);
+	for (size_t i = 0; i < length; i++) {
+		network_bytes[i] &= bytes[i];
+	}
+#if LWIP_IPV6
+	if (IP_IS_V6(&network)) {
+		ip6_addr_clear_zone(ip_2_ip6(&network));
+	}
+#endif
+	return peer_add_ip(peer, network, mask) ? ERR_OK : ERR_MEM;
+}
+
+#if LWIP_IPV6
+err_t wireguardif_set_ip6_address(struct netif *netif, const ip6_addr_t *address) {
+	// This is a static L3 interface: no Ethernet neighbour discovery, DAD, or
+	// SLAAC is needed, but ESP-IDF's IPv6 input hook requires a link-local address.
+	if (!netif || !address || LWIP_IPV6_NUM_ADDRESSES < 2 || netif->mtu < 1280 ||
+			ip6_addr_isany(address) || ip6_addr_ismulticast(address) ||
+			ip6_addr_islinklocal(address) || ip6_addr_isloopback(address)) {
+		return ERR_ARG;
+	}
+#if !CHECKSUM_GEN_UDP || !CHECKSUM_GEN_ICMP6 || !LWIP_ICMP6
+	// Encrypted inner packets cannot use underlying hardware checksum offload.
+	return ERR_IF;
+#endif
+	if (ip6_addr_isany(netif_ip6_addr(netif, 0))) {
+		// Derive the link-local IID from the configured tunnel address. Slot zero
+		// must be populated before lwIP can accept packets for any IPv6 address.
+		ip6_addr_t link_local;
+		IP6_ADDR(&link_local, PP_HTONL(0xfe800000UL), 0, address->addr[2], address->addr[3]);
+		if (link_local.addr[2] == 0 && link_local.addr[3] == 0) {
+			link_local.addr[3] = PP_HTONL(1);
+		}
+		netif_ip6_addr_set(netif, 0, &link_local);
+#if LWIP_IPV6_ADDRESS_LIFETIMES
+		netif_ip6_addr_set_valid_life(netif, 0, IP6_ADDR_LIFE_STATIC);
+		netif_ip6_addr_set_pref_life(netif, 0, IP6_ADDR_LIFE_STATIC);
+#endif
+		netif_ip6_addr_set_state(netif, 0, IP6_ADDR_PREFERRED);
+	}
+#if LWIP_IPV6_AUTOCONFIG
+	netif_set_ip6_autoconfig_enabled(netif, 0);
+#endif
+#if LWIP_IPV6_SEND_ROUTER_SOLICIT
+	netif->rs_count = 0;
+#endif
+	netif_ip6_addr_set_state(netif, 1, IP6_ADDR_INVALID);
+	netif_ip6_addr_set(netif, 1, address);
+#if LWIP_IPV6_ADDRESS_LIFETIMES
+	netif_ip6_addr_set_valid_life(netif, 1, IP6_ADDR_LIFE_STATIC);
+	netif_ip6_addr_set_pref_life(netif, 1, IP6_ADDR_LIFE_STATIC);
+#endif
+	netif_ip6_addr_set_state(netif, 1, IP6_ADDR_PREFERRED);
+	return ERR_OK;
+}
+
+struct netif *wireguardif_route_ip6(struct netif *netif, const ip6_addr_t *destination) {
+	if (!netif || !destination || LWIP_IPV6_NUM_ADDRESSES < 2 ||
+			!netif_is_up(netif) || !netif_is_link_up(netif) ||
+			!ip6_addr_isvalid(netif_ip6_addr_state(netif, 1))) {
+		return NULL;
+	}
+	ip_addr_t ip;
+	ip_addr_copy_from_ip6(ip, *destination);
+	struct wireguard_device *device = netif_get_client_data(netif, wg_netif_client_id);
+	return peer_lookup_by_allowed_ip(device, &ip) ? netif : NULL;
+}
+#endif
 
 err_t wireguardif_connect(struct netif *netif, u8_t peer_index) {
 	struct wireguard_peer *peer;
@@ -1035,10 +1234,21 @@ err_t wireguardif_init(struct netif *netif) {
 	netif_set_client_data(netif, wg_netif_client_id, device);
 	netif->name[0] = 'w';
 	netif->name[1] = 'g';
+#if LWIP_IPV4
 	netif->output = wireguardif_output;
+#endif
+#if LWIP_IPV6
+	netif->output_ip6 = wireguardif_output_ip6;
+#if LWIP_IPV6_AUTOCONFIG
+	netif_set_ip6_autoconfig_enabled(netif, 0);
+#endif
+#endif
 	netif->linkoutput = NULL;
 	netif->hwaddr_len = 0;
 	netif->mtu = (init_data->mtu > 0) ? init_data->mtu : WIREGUARDIF_MTU;
+#if LWIP_IPV6 && LWIP_ND6_ALLOW_RA_UPDATES
+	netif->mtu6 = netif->mtu;
+#endif
 	// We set up no state flags here - caller should set them
 	// NETIF_FLAG_LINK_UP is automatically set/cleared when at least one peer is connected
 	netif->flags = 0;
