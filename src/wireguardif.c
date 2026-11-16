@@ -249,8 +249,6 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 	return result;
 }
 
-// This is used as the output function for the Wireguard netif
-// The ipaddr here is the one inside the VPN which we use to lookup the correct peer/endpoint
 #if LWIP_IPV6
 // lwIP 2.1 normally creates these entries in Ethernet neighbour resolution.
 // A layer-3 tunnel bypasses that path, but lwIP's ICMPv6 Packet Too Big handler
@@ -280,6 +278,8 @@ static void wireguardif_track_ip6_destination(struct netif *netif, const ip6_add
 }
 #endif
 
+// This is used as the output function for the Wireguard netif
+// The ipaddr here is the one inside the VPN which we use to lookup the correct peer/endpoint
 static err_t wireguardif_output_ip(struct netif *netif, struct pbuf *q, const ip_addr_t *ipaddr) {
 	struct wireguard_device *device = (struct wireguard_device *) netif_get_client_data(netif, wg_netif_client_id);
 	// Send to peer that matches dest IP
