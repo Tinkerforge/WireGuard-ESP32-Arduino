@@ -477,7 +477,7 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 
 					// Authenticate before replay checks and inner source validation.
 					// A zero-length plaintext is a WireGuard keepalive.
-					if (wireguard_check_replay(keypair, nonce) && pbuf->tot_len > 0 &&
+					if (pbuf->tot_len > 0 && wireguard_check_replay(keypair, nonce) &&
 							parse_inner_packet(pbuf->payload, pbuf->tot_len, &source, &packet_length) &&
 							peer_allows_ip(peer, &source)) {
 						if (device->in_filter_fn == NULL || device->in_filter_fn(pbuf) == 0) {
