@@ -469,8 +469,6 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 					if (wireguard_check_replay(keypair, nonce) && pbuf->tot_len > 0 &&
 							parse_inner_packet(pbuf->payload, pbuf->tot_len, &source, &packet_length) &&
 							peer_allows_ip(peer, &source)) {
-						// Strip authenticated WireGuard padding before filters and lwIP.
-						pbuf_realloc(pbuf, packet_length);
 						if (device->in_filter_fn == NULL || device->in_filter_fn(pbuf) == 0) {
 							if (device->netif->input(pbuf, device->netif) == ERR_OK) {
 								// The input function owns accepted pbufs.
