@@ -1246,9 +1246,6 @@ err_t wireguardif_init(struct netif *netif) {
 	netif->linkoutput = NULL;
 	netif->hwaddr_len = 0;
 	netif->mtu = (init_data->mtu > 0) ? init_data->mtu : WIREGUARDIF_MTU;
-#if LWIP_IPV6 && LWIP_ND6_ALLOW_RA_UPDATES
-	netif->mtu6 = netif->mtu;
-#endif
 	// We set up no state flags here - caller should set them
 	// NETIF_FLAG_LINK_UP is automatically set/cleared when at least one peer is connected
 	netif->flags = 0;
