@@ -44,7 +44,11 @@
 #include "lwip/mem.h"
 #include "lwip/sys.h"
 #include "lwip/timeouts.h"
+#if LWIP_IPV4
+#include "lwip/prot/ip4.h"
+#endif
 #if LWIP_IPV6
+#include "lwip/prot/ip6.h"
 #include "lwip/priv/nd6_priv.h"
 #endif
 
@@ -72,7 +76,7 @@ static void wireguardif_set_link_up(struct netif *netif) {
 }
 
 static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr, u16_t port) {
-	peer->ip = *addr;
+	ip_addr_copy(peer->ip, *addr);
 	peer->port = port;
 }
 
@@ -94,14 +98,19 @@ static const uint8_t *address_bytes(const ip_addr_t *ip, size_t *length) {
 	return NULL;
 }
 
-// Byte masks also preserve the legacy IPv4 address/netmask API.
 static bool allowed_ip_matches(const struct wireguard_allowed_ip *allowed, const ip_addr_t *ip) {
 	if (!allowed->valid || IP_GET_TYPE(ip) != IP_GET_TYPE(&allowed->ip) ||
 			IP_GET_TYPE(ip) != IP_GET_TYPE(&allowed->mask)) {
 		return false;
 	}
 
-	// This is safe since it is previously checked that the types match. The length is the same for all three addresses.
+#if LWIP_IPV4
+	if (IP_IS_V4(ip)) {
+		return ip4_addr_netcmp(ip_2_ip4(ip), ip_2_ip4(&allowed->ip), ip_2_ip4(&allowed->mask));
+	}
+#endif
+	// lwIP's IPv6 network comparison only supports /64, so apply the full mask
+	// here for arbitrary IPv6 prefixes. Address types have already been checked.
 	size_t length;
 	const uint8_t *address = address_bytes(ip, &length);
 	const uint8_t *network = address_bytes(&allowed->ip, &length);
@@ -325,7 +334,7 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 	if (wireguard_process_handshake_response(device, peer, response)) {
 		// Packet is good
 		// Update the peer location
-		log_i(TAG "good handshake from %08x:%d", addr->u_addr.ip4.addr, port);
+		log_i(TAG "good handshake from %s:%d", ipaddr_ntoa(addr), port);
 		update_peer_addr(peer, addr, port);
 
 		wireguard_start_session(peer, true);
@@ -335,7 +344,7 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 		wireguardif_set_link_up(device->netif);
 	} else {
 		// Packet bad
-		log_i(TAG "bad handshake from %08x:%d", addr->u_addr.ip4.addr, port);
+		log_i(TAG "bad handshake from %s:%d", ipaddr_ntoa(addr), port);
 	}
 }
 
@@ -357,8 +366,8 @@ static bool peer_add_ip(struct wireguard_peer *peer, ip_addr_t ip, ip_addr_t mas
 			allowed = &peer->allowed_source_ips[x];
 			if (!allowed->valid) {
 				allowed->valid = true;
-				allowed->ip = ip;
-				allowed->mask = mask;
+				ip_addr_copy(allowed->ip, ip);
+				ip_addr_copy(allowed->mask, mask);
 				result = true;
 				break;
 			}
@@ -367,8 +376,8 @@ static bool peer_add_ip(struct wireguard_peer *peer, ip_addr_t ip, ip_addr_t mas
 	return result;
 }
 
-// Decrypted packets are contiguous PBUF_RAM. Read bytes only after checking the
-// base header, avoiding alignment assumptions and IPv4 macros on IPv6 headers.
+// Decrypted packets are contiguous PBUF_RAM. Copy each validated base header
+// before accessing it so the packet does not need to be aligned.
 // Transport and extension headers are validated by lwIP, not by WireGuard.
 static bool parse_inner_packet(const uint8_t *packet, size_t length, ip_addr_t *source, u16_t *packet_length) {
 	if (length == 0) {
@@ -377,30 +386,32 @@ static bool parse_inner_packet(const uint8_t *packet, size_t length, ip_addr_t *
 	size_t size;
 #if LWIP_IPV4
 	if ((packet[0] >> 4) == 4) {
-		if (length < 20) {
+		if (length < IP_HLEN) {
 			return false;
 		}
-		size_t header_length = (packet[0] & 15) * 4;
-		size = ((size_t)packet[2] << 8) | packet[3];
-		if (header_length < 20 || size < header_length || size > length) {
+		struct ip_hdr header;
+		memcpy(&header, packet, sizeof(header));
+		size_t header_length = IPH_HL_BYTES(&header);
+		size = lwip_ntohs(IPH_LEN(&header));
+		if (header_length < IP_HLEN || size < header_length || size > length) {
 			return false;
 		}
-		ip_addr_set_zero_ip4(source);
-		memcpy(&ip_2_ip4(source)->addr, packet + 12, 4);
+		ip_addr_copy_from_ip4(*source, header.src);
 	} else
 #endif
 #if LWIP_IPV6
 	if ((packet[0] >> 4) == 6) {
-		if (length < 40) {
+		if (length < IP6_HLEN) {
 			return false;
 		}
-		size = 40 + (((size_t)packet[4] << 8) | packet[5]);
+		struct ip6_hdr header;
+		memcpy(&header, packet, sizeof(header));
+		size = IP6_HLEN + (size_t)IP6H_PLEN(&header);
 		// lwIP pbuf lengths are 16 bit; jumbograms are not supported.
 		if (size > length || size > 0xFFFF) {
 			return false;
 		}
-		ip_addr_set_zero_ip6(source);
-		memcpy(ip_2_ip6(source)->addr, packet + 8, 16);
+		ip_addr_copy_from_ip6_packed(*source, header.src);
 	} else
 #endif
 	{
@@ -550,22 +561,19 @@ static size_t get_source_addr_port(const ip_addr_t *addr, u16_t port, uint8_t *b
 	size_t result = 0;
 
 #if LWIP_IPV4
-	if (IP_IS_V4(addr) && (buflen >= 4)) {
-		U32TO8_BIG(buf + result, PP_NTOHL(ip4_addr_get_u32(ip_2_ip4(addr))));
-		result += 4;
+	if (IP_IS_V4(addr) && (buflen >= sizeof(ip4_addr_p_t))) {
+		ip4_addr_p_t address;
+		ip4_addr_copy(address, *ip_2_ip4(addr));
+		memcpy(buf, &address, sizeof(address));
+		result += sizeof(address);
 	}
 #endif
 #if LWIP_IPV6
-	if (IP_IS_V6(addr) && (buflen >= 16)) {
-		U16TO8_BIG(buf + result + 0, IP6_ADDR_BLOCK1(ip_2_ip6(addr)));
-		U16TO8_BIG(buf + result + 2, IP6_ADDR_BLOCK2(ip_2_ip6(addr)));
-		U16TO8_BIG(buf + result + 4, IP6_ADDR_BLOCK3(ip_2_ip6(addr)));
-		U16TO8_BIG(buf + result + 6, IP6_ADDR_BLOCK4(ip_2_ip6(addr)));
-		U16TO8_BIG(buf + result + 8, IP6_ADDR_BLOCK5(ip_2_ip6(addr)));
-		U16TO8_BIG(buf + result + 10, IP6_ADDR_BLOCK6(ip_2_ip6(addr)));
-		U16TO8_BIG(buf + result + 12, IP6_ADDR_BLOCK7(ip_2_ip6(addr)));
-		U16TO8_BIG(buf + result + 14, IP6_ADDR_BLOCK8(ip_2_ip6(addr)));
-		result += 16;
+	if (IP_IS_V6(addr) && (buflen >= sizeof(ip6_addr_p_t))) {
+		ip6_addr_p_t address;
+		ip6_addr_copy_to_packed(address, *ip_2_ip6(addr));
+		memcpy(buf, &address, sizeof(address));
+		result += sizeof(address);
 	}
 #endif
 	if (buflen >= result + 2) {
@@ -675,12 +683,12 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 	struct message_transport_data *msg_data;
 
 	uint8_t type = wireguard_get_message_type(data, len);
-	ESP_LOGV(TAG, "network_rx: %08x:%d", addr->u_addr.ip4.addr, port);
+	ESP_LOGV(TAG, "network_rx: %s:%d", ipaddr_ntoa(addr), port);
 
 	switch (type) {
 		case MESSAGE_HANDSHAKE_INITIATION:
 			msg_initiation = (struct message_handshake_initiation *)data;
-			log_i(TAG "HANDSHAKE_INITIATION: %08x:%d", addr->u_addr.ip4.addr, port);
+			log_i(TAG "HANDSHAKE_INITIATION: %s:%d", ipaddr_ntoa(addr), port);
 			// Check mac1 (and optionally mac2) are correct - note it may internally generate a cookie reply packet
 			if (wireguardif_check_initiation_message(device, msg_initiation, addr, port)) {
 
@@ -696,7 +704,7 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 			break;
 
 		case MESSAGE_HANDSHAKE_RESPONSE:
-			log_i(TAG "HANDSHAKE_RESPONSE: %08x:%d", addr->u_addr.ip4.addr, port);
+			log_i(TAG "HANDSHAKE_RESPONSE: %s:%d", ipaddr_ntoa(addr), port);
 			msg_response = (struct message_handshake_response *)data;
 
 			// Check mac1 (and optionally mac2) are correct - note it may internally generate a cookie reply packet
@@ -711,7 +719,7 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 			break;
 
 		case MESSAGE_COOKIE_REPLY:
-			log_i(TAG "COOKIE_REPLY: %08x:%d", addr->u_addr.ip4.addr, port);
+			log_i(TAG "COOKIE_REPLY: %s:%d", ipaddr_ntoa(addr), port);
 			msg_cookie = (struct message_cookie_reply *)data;
 			peer = peer_lookup_by_handshake(device, msg_cookie->receiver);
 			if (peer) {
@@ -725,7 +733,7 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 			break;
 
 		case MESSAGE_TRANSPORT_DATA:
-			ESP_LOGV(TAG, "TRANSPORT_DATA: %08x:%d", addr->u_addr.ip4.addr, port);
+			ESP_LOGV(TAG, "TRANSPORT_DATA: %s:%d", ipaddr_ntoa(addr), port);
 
 			msg_data = (struct message_transport_data *)data;
 			peer = peer_lookup_by_receiver(device, msg_data->receiver);
@@ -752,7 +760,7 @@ static err_t wireguard_start_handshake(struct netif *netif, struct wireguard_pee
 	pbuf = wireguardif_initiate_handshake(device, peer, &msg, &result);
 	if (pbuf) {
 		result = wireguardif_peer_output(netif, pbuf, peer);
-		log_i(TAG "start handshake %08x,%d - %d", peer->ip.u_addr.ip4.addr, peer->port, result);
+		log_i(TAG "start handshake %s,%d - %d", ipaddr_ntoa(&peer->ip), peer->port, result);
 		pbuf_free(pbuf);
 		peer->send_handshake = false;
 		peer->last_initiation_tx = wireguard_sys_now();
@@ -797,21 +805,28 @@ err_t wireguardif_add_allowed_ip(struct netif *netif, u8_t peer_index, const ip_
 		return result;
 	}
 	ip_addr_t mask;
-	memset(&mask, 0, sizeof(mask));
+	ip_addr_set_zero(&mask);
 	IP_SET_TYPE_VAL(mask, IP_GET_TYPE(ip));
+	// lwIP has no helper for constructing an arbitrary IPv4 or IPv6 prefix mask.
 	uint8_t *bytes = (uint8_t *)address_bytes(&mask, &length);
 	for (size_t i = 0; i < length; i++) {
 		int bits = (int)prefix_length - (int)i * 8;
 		bytes[i] = bits >= 8 ? 0xFF : bits > 0 ? (uint8_t)(0xFF << (8 - bits)) : 0;
 	}
 	// Canonicalize host bits so duplicate prefixes do not consume extra slots.
-	ip_addr_t network = *ip;
-	uint8_t *network_bytes = (uint8_t *)address_bytes(&network, &length);
-	for (size_t i = 0; i < length; i++) {
-		network_bytes[i] &= bytes[i];
+	ip_addr_t network;
+	ip_addr_copy(network, *ip);
+#if LWIP_IPV4
+	if (IP_IS_V4(&network)) {
+		ip4_addr_get_network(ip_2_ip4(&network), ip_2_ip4(ip), ip_2_ip4(&mask));
 	}
+#endif
 #if LWIP_IPV6
 	if (IP_IS_V6(&network)) {
+		uint8_t *network_bytes = (uint8_t *)address_bytes(&network, &length);
+		for (size_t i = 0; i < length; i++) {
+			network_bytes[i] &= bytes[i];
+		}
 		ip6_addr_clear_zone(ip_2_ip6(&network));
 	}
 #endif
@@ -920,7 +935,7 @@ err_t wireguardif_peer_is_up(struct netif *netif, u8_t peer_index, ip_addr_t *cu
 			result = ERR_CONN;
 		}
 		if (current_ip) {
-			*current_ip = peer->ip;
+			ip_addr_copy(*current_ip, peer->ip);
 		}
 		if (current_port) {
 			*current_port = peer->port;
@@ -944,7 +959,7 @@ err_t wireguardif_update_endpoint(struct netif *netif, u8_t peer_index, const ip
 	struct wireguard_peer *peer;
 	err_t result = wireguardif_lookup_peer(netif, peer_index, &peer);
 	if (result == ERR_OK) {
-		peer->connect_ip = *ip;
+		ip_addr_copy(peer->connect_ip, *ip);
 		peer->connect_port = port;
 		result = ERR_OK;
 	}
@@ -979,9 +994,9 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t
 
 				if (wireguard_peer_init(device, peer, public_key, p->preshared_key == NULL ? NULL : preshared_key)) {
 
-					peer->connect_ip = p->endpoint_ip;
+					ip_addr_copy(peer->connect_ip, p->endpoint_ip);
 					peer->connect_port = p->endport_port;
-					peer->ip = peer->connect_ip;
+					ip_addr_copy(peer->ip, peer->connect_ip);
 					peer->port = peer->connect_port;
 					if (p->keep_alive == WIREGUARDIF_KEEPALIVE_DEFAULT) {
 						peer->keepalive_interval = KEEPALIVE_TIMEOUT;
@@ -1088,7 +1103,7 @@ static void wireguardif_tmr(void *arg) {
 				handshake_destroy(&peer->handshake);
 
 				// Revert back to default IP/port if these were altered
-				peer->ip = peer->connect_ip;
+				ip_addr_copy(peer->ip, peer->connect_ip);
 				peer->port = peer->connect_port;
 			}
 			if (should_destroy_current_keypair(peer)) {
@@ -1111,9 +1126,9 @@ static void wireguardif_tmr(void *arg) {
 				bool up = peer->curr_keypair.valid;
 				struct wireguard_peer_info *info = &device->peer_infos[peer_idx];
 
-				if (info->up != up || memcmp(&info->addr, &peer->ip, sizeof(info->addr)) != 0 || info->port != peer->port) {
+				if (info->up != up || !ip_addr_cmp(&info->addr, &peer->ip) || info->port != peer->port) {
 					info->up = up;
-					info->addr = peer->ip;
+					ip_addr_copy(info->addr, peer->ip);
 					info->port = peer->port;
 					device->update_peer_info_fn(peer_idx, info->up, &info->addr, info->port, device->update_peer_info_fn_user_data);
 				}

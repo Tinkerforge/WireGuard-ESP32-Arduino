@@ -131,7 +131,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 		struct addrinfo hint;
 		memset(&hint, 0, sizeof(hint));
 		hint.ai_family = AF_INET; // The encrypted outer transport stays IPv4.
-		memset(&endpoint_ip, 0, sizeof(endpoint_ip));
+		ip_addr_set_zero_ip4(&endpoint_ip);
 
 		const int64_t t_lookup_start_us = esp_timer_get_time();
 		if( lwip_getaddrinfo(remotePeerAddress, NULL, &hint, &res) != 0 ) {
@@ -156,13 +156,9 @@ bool WireGuard::begin(const IPAddress& localIP,
 		IP_SET_TYPE_VAL(endpoint_ip, IPADDR_TYPE_V4);
 		lwip_freeaddrinfo(res);
 
-		log_i(TAG "%s is %3d.%3d.%3d.%3d"
-			, remotePeerAddress
-			, (endpoint_ip.u_addr.ip4.addr >>  0) & 0xff
-			, (endpoint_ip.u_addr.ip4.addr >>  8) & 0xff
-			, (endpoint_ip.u_addr.ip4.addr >> 16) & 0xff
-			, (endpoint_ip.u_addr.ip4.addr >> 24) & 0xff
-			);
+		char endpoint_ip_str[IPADDR_STRLEN_MAX];
+		log_i(TAG "%s is %s", remotePeerAddress,
+		      ipaddr_ntoa_r(&endpoint_ip, endpoint_ip_str, sizeof(endpoint_ip_str)));
 		break;
 	}
 	if( !success_get_endpoint_ip  ) {
@@ -173,7 +169,7 @@ bool WireGuard::begin(const IPAddress& localIP,
 	// Initialise the first WireGuard peer structure
 	struct wireguardif_peer peer;
 	wireguardif_peer_init(&peer);
-	peer.endpoint_ip = endpoint_ip;
+	ip_addr_copy(peer.endpoint_ip, endpoint_ip);
 	peer.public_key = remotePeerPublicKey;
 	peer.preshared_key = preshared_key;
 	peer.allowed_ip = IPADDR4_INIT(static_cast<uint32_t>(allowedIP));
