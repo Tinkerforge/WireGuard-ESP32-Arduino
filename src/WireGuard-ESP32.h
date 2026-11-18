@@ -62,12 +62,12 @@ public:
 
 	// Call after begin(). Arguments are parsed and copied before returning; no
 	// caller-owned address or prefix storage is retained. end() clears settings.
-	// IPv6 requires an lwIP IPv6 build and an interface MTU of at least 1280.
+	// Set the static IPv6 link-local address. Requires lwIP IPv6 and MTU >= 1280.
 	bool setIPv6Address(const char* address);
 	bool addAllowedIP(const char* network, uint8_t prefixLength);
 
 #if LWIP_IPV6
-	// Call only in lwIP TCP/IP context, e.g. from your existing route hook.
+	// Call only in lwIP TCP/IP context.
 	// Returns this tunnel for allowed destinations while up, otherwise nullptr.
 	// Does not install/replace hooks or change the default interface.
 	struct netif* routeIPv6(const ip6_addr_t* destination) const;

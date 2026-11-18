@@ -835,52 +835,26 @@ err_t wireguardif_add_allowed_ip(struct netif *netif, u8_t peer_index, const ip_
 
 #if LWIP_IPV6
 err_t wireguardif_set_ip6_address(struct netif *netif, const ip6_addr_t *address) {
-	// This is a static L3 interface: no Ethernet neighbour discovery, DAD, or
-	// SLAAC is needed, but ESP-IDF's IPv6 input hook requires a link-local address.
-	if (!netif || !address || LWIP_IPV6_NUM_ADDRESSES < 2 || netif->mtu < 1280 ||
-			ip6_addr_isany(address) || ip6_addr_ismulticast(address) ||
-			ip6_addr_islinklocal(address) || ip6_addr_isloopback(address)) {
+	if (!netif || !address || netif->mtu < 1280 || !ip6_addr_islinklocal(address)) {
 		return ERR_ARG;
 	}
 #if !CHECKSUM_GEN_UDP || !CHECKSUM_GEN_ICMP6 || !LWIP_ICMP6
 	// Encrypted inner packets cannot use underlying hardware checksum offload.
 	return ERR_IF;
 #endif
-	if (ip6_addr_isany(netif_ip6_addr(netif, 0))) {
-		// Derive the link-local IID from the configured tunnel address. Slot zero
-		// must be populated before lwIP can accept packets for any IPv6 address.
-		ip6_addr_t link_local;
-		IP6_ADDR(&link_local, PP_HTONL(0xfe800000UL), 0, address->addr[2], address->addr[3]);
-		if (link_local.addr[2] == 0 && link_local.addr[3] == 0) {
-			link_local.addr[3] = PP_HTONL(1);
-		}
-		netif_ip6_addr_set(netif, 0, &link_local);
+	// lwIP assigns the interface zone when setting its link-local address.
+	netif_ip6_addr_set(netif, 0, address);
 #if LWIP_IPV6_ADDRESS_LIFETIMES
-		netif_ip6_addr_set_valid_life(netif, 0, IP6_ADDR_LIFE_STATIC);
-		netif_ip6_addr_set_pref_life(netif, 0, IP6_ADDR_LIFE_STATIC);
+	netif_ip6_addr_set_valid_life(netif, 0, IP6_ADDR_LIFE_STATIC);
+	netif_ip6_addr_set_pref_life(netif, 0, IP6_ADDR_LIFE_STATIC);
 #endif
-		netif_ip6_addr_set_state(netif, 0, IP6_ADDR_PREFERRED);
-	}
-#if LWIP_IPV6_AUTOCONFIG
-	netif_set_ip6_autoconfig_enabled(netif, 0);
-#endif
-#if LWIP_IPV6_SEND_ROUTER_SOLICIT
-	netif->rs_count = 0;
-#endif
-	netif_ip6_addr_set_state(netif, 1, IP6_ADDR_INVALID);
-	netif_ip6_addr_set(netif, 1, address);
-#if LWIP_IPV6_ADDRESS_LIFETIMES
-	netif_ip6_addr_set_valid_life(netif, 1, IP6_ADDR_LIFE_STATIC);
-	netif_ip6_addr_set_pref_life(netif, 1, IP6_ADDR_LIFE_STATIC);
-#endif
-	netif_ip6_addr_set_state(netif, 1, IP6_ADDR_PREFERRED);
+	netif_ip6_addr_set_state(netif, 0, IP6_ADDR_PREFERRED);
 	return ERR_OK;
 }
 
 struct netif *wireguardif_route_ip6(struct netif *netif, const ip6_addr_t *destination) {
-	if (!netif || !destination || LWIP_IPV6_NUM_ADDRESSES < 2 ||
-			!netif_is_up(netif) || !netif_is_link_up(netif) ||
-			!ip6_addr_isvalid(netif_ip6_addr_state(netif, 1))) {
+	if (!netif || !destination || !netif_is_up(netif) || !netif_is_link_up(netif) ||
+			!ip6_addr_isvalid(netif_ip6_addr_state(netif, 0))) {
 		return NULL;
 	}
 	ip_addr_t ip;

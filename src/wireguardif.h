@@ -133,11 +133,11 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *peer, u
 err_t wireguardif_add_allowed_ip(struct netif *netif, u8_t peer_index, const ip_addr_t *ip, u8_t prefix_length);
 
 #if LWIP_IPV6
-// Configure one static unicast tunnel address (no SLAAC or DAD). MTU must be >=1280.
+// Configure a static IPv6 link-local address (no SLAAC or DAD). MTU must be >= 1280.
 err_t wireguardif_set_ip6_address(struct netif *netif, const ip6_addr_t *address);
 
-// Optional routing helper: returns netif if up and a peer allows destination,
-// otherwise NULL. Call from the application's IPv6 routing hook; installs no hook.
+// Return netif if up, configured for IPv6, and a peer allows destination.
+// Otherwise return NULL.
 struct netif *wireguardif_route_ip6(struct netif *netif, const ip6_addr_t *destination);
 #endif
 
